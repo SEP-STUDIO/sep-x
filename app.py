@@ -1,4 +1,4 @@
-from flask import Flask, jsonify, request, render_template, session
+from flask import Flask, jsonify, request, session, send_file
 from flask_cors import CORS
 from flask_sqlalchemy import SQLAlchemy
 from datetime import datetime, timedelta
@@ -10,6 +10,7 @@ import logging
 import os
 from functools import wraps
 from dotenv import load_dotenv
+import io
 
 load_dotenv()
 
@@ -159,7 +160,9 @@ def require_api_key(f):
 
 @app.route('/')
 def index():
-    return render_template('dashboard.html')
+    """Serve the dashboard HTML directly"""
+    with open('dashboard.html', 'r', encoding='utf-8') as f:
+        return f.read()
 
 @app.route('/health')
 def health():
