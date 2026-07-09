@@ -1,15 +1,1265 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-    <meta charset="UTF-8" />
+ <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>SEP X · DeepSeek API Gateway</title>
     <link href="https://fonts.googleapis.com/css2?family=Inter:opsz,wght@14..32,400;14..32,500;14..32,600;14..32,700&display=swap" rel="stylesheet" />
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.0/css/all.min.css" />
-    <!-- Rest of the CSS from previous dashboard -->
-    <!-- [FULL DASHBOARD HTML FROM PREVIOUS RESPONSE] -->
+
+    <style>
+        /* ====================================================
+                   RESET & BASE
+                ==================================================== */
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
+            background: #0b0b1a;
+            color: #eaeef2;
+            min-height: 100vh;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            padding: 24px;
+        }
+
+        /* subtle radial glow */
+        body::before {
+            content: '';
+            position: fixed;
+            inset: 0;
+            background: radial-gradient(ellipse at 50% 0%, rgba(102, 126, 234, 0.08) 0%, transparent 70%);
+            pointer-events: none;
+            z-index: 0;
+        }
+
+        .app {
+            position: relative;
+            z-index: 1;
+            width: 100%;
+            max-width: 1280px;
+        }
+
+        /* ====================================================
+                   GLASS CARD
+                ==================================================== */
+        .glass {
+            background: rgba(22, 22, 44, 0.72);
+            backdrop-filter: blur(18px);
+            -webkit-backdrop-filter: blur(18px);
+            border: 1px solid rgba(255, 255, 255, 0.05);
+            border-radius: 24px;
+            box-shadow: 0 25px 60px -12px rgba(0, 0, 0, 0.8);
+        }
+
+        /* ====================================================
+                   HEADER
+                ==================================================== */
+        .header {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            padding: 20px 32px;
+            border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+            flex-wrap: wrap;
+            gap: 12px;
+        }
+
+        .logo-area {
+            display: flex;
+            align-items: center;
+            gap: 14px;
+        }
+
+        .logo-icon {
+            width: 40px;
+            height: 40px;
+            border-radius: 12px;
+            background: linear-gradient(135deg, #667eea, #764ba2);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-weight: 700;
+            font-size: 20px;
+            color: #fff;
+            box-shadow: 0 8px 24px rgba(102, 126, 234, 0.3);
+        }
+
+        .logo-text {
+            font-size: 22px;
+            font-weight: 700;
+            letter-spacing: -0.3px;
+            background: linear-gradient(135deg, #fff 60%, #a78bfa);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+        }
+
+        .logo-text span {
+            font-weight: 400;
+            -webkit-text-fill-color: #6b7280;
+            font-size: 16px;
+        }
+
+        .header-actions {
+            display: flex;
+            align-items: center;
+            gap: 16px;
+            flex-wrap: wrap;
+        }
+
+        /* ====================================================
+                   STATUS PILL
+                ==================================================== */
+        .status-pill {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            padding: 6px 16px 6px 12px;
+            border-radius: 40px;
+            background: rgba(255, 255, 255, 0.04);
+            border: 1px solid rgba(255, 255, 255, 0.06);
+            font-size: 13px;
+            font-weight: 500;
+            color: #9ca3af;
+            transition: all 0.3s;
+        }
+
+        .status-pill .dot {
+            width: 8px;
+            height: 8px;
+            border-radius: 50%;
+            background: #4b5563;
+            transition: all 0.3s;
+        }
+
+        .status-pill .dot.online {
+            background: #34d399;
+            box-shadow: 0 0 12px rgba(52, 211, 153, 0.4);
+        }
+
+        .status-pill .dot.offline {
+            background: #f87171;
+            box-shadow: 0 0 12px rgba(248, 113, 113, 0.3);
+        }
+
+        .status-pill .dot.checking {
+            background: #fbbf24;
+            animation: pulse-dot 1s infinite;
+        }
+
+        @keyframes pulse-dot {
+            0%,
+            100% {
+                opacity: 1;
+                transform: scale(1);
+            }
+            50% {
+                opacity: 0.4;
+                transform: scale(0.8);
+            }
+        }
+
+        /* ====================================================
+                   MAIN GRID
+                ==================================================== */
+        .main-grid {
+            display: grid;
+            grid-template-columns: 1fr 2fr;
+            gap: 24px;
+            padding: 28px 32px 32px;
+        }
+
+        @media (max-width: 920px) {
+            .main-grid {
+                grid-template-columns: 1fr;
+                padding: 20px;
+            }
+        }
+
+        /* ====================================================
+                   LEFT CARD — AUTH / TOKEN
+                ==================================================== */
+        .auth-card {
+            background: rgba(255, 255, 255, 0.02);
+            border-radius: 18px;
+            padding: 24px;
+            border: 1px solid rgba(255, 255, 255, 0.04);
+        }
+
+        .auth-card h2 {
+            font-size: 16px;
+            font-weight: 600;
+            color: #d1d5db;
+            margin-bottom: 6px;
+        }
+
+        .auth-card .sub {
+            font-size: 13px;
+            color: #6b7280;
+            margin-bottom: 20px;
+        }
+
+        .auth-card .sub i {
+            margin-right: 6px;
+        }
+
+        /* ---- Google Sign-In Button ---- */
+        .google-btn {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 12px;
+            width: 100%;
+            padding: 12px;
+            background: #fff;
+            border: none;
+            border-radius: 12px;
+            font-size: 15px;
+            font-weight: 600;
+            color: #1f2937;
+            cursor: pointer;
+            transition: all 0.2s;
+            box-shadow: 0 2px 8px rgba(0, 0, 0, 0.2);
+        }
+
+        .google-btn:hover {
+            transform: scale(1.01);
+            box-shadow: 0 8px 24px rgba(0, 0, 0, 0.3);
+        }
+
+        .google-btn:active {
+            transform: scale(0.98);
+        }
+
+        .google-btn img {
+            width: 22px;
+            height: 22px;
+        }
+
+        /* ---- Divider ---- */
+        .divider {
+            display: flex;
+            align-items: center;
+            gap: 14px;
+            color: #4b5563;
+            font-size: 12px;
+            margin: 18px 0;
+        }
+
+        .divider::before,
+        .divider::after {
+            content: '';
+            flex: 1;
+            height: 1px;
+            background: rgba(255, 255, 255, 0.06);
+        }
+
+        /* ---- Email/Password Form ---- */
+        .auth-form .field {
+            margin-bottom: 12px;
+        }
+
+        .auth-form label {
+            display: block;
+            font-size: 12px;
+            font-weight: 500;
+            color: #9ca3af;
+            margin-bottom: 4px;
+            text-transform: uppercase;
+            letter-spacing: 0.4px;
+        }
+
+        .auth-form input {
+            width: 100%;
+            padding: 10px 14px;
+            background: rgba(255, 255, 255, 0.04);
+            border: 1px solid rgba(255, 255, 255, 0.06);
+            border-radius: 10px;
+            color: #eaeef2;
+            font-size: 14px;
+            font-family: inherit;
+            transition: border 0.2s;
+        }
+
+        .auth-form input:focus {
+            outline: none;
+            border-color: #667eea;
+            background: rgba(255, 255, 255, 0.06);
+        }
+
+        .auth-form input::placeholder {
+            color: #4b5563;
+        }
+
+        .auth-form .btn-primary {
+            width: 100%;
+            padding: 11px;
+            border: none;
+            border-radius: 10px;
+            background: linear-gradient(135deg, #667eea, #764ba2);
+            color: #fff;
+            font-weight: 600;
+            font-size: 14px;
+            cursor: pointer;
+            transition: all 0.2s;
+            font-family: inherit;
+            margin-top: 4px;
+        }
+
+        .auth-form .btn-primary:hover {
+            transform: translateY(-1px);
+            box-shadow: 0 8px 28px rgba(102, 126, 234, 0.3);
+        }
+
+        .auth-form .btn-primary:disabled {
+            opacity: 0.5;
+            cursor: not-allowed;
+            transform: none !important;
+        }
+
+        /* ---- Token Status inside Auth Card ---- */
+        .token-status-box {
+            margin-top: 18px;
+            padding: 14px 16px;
+            border-radius: 12px;
+            background: rgba(255, 255, 255, 0.02);
+            border: 1px solid rgba(255, 255, 255, 0.04);
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            flex-wrap: wrap;
+            gap: 8px;
+        }
+
+        .token-status-box .label {
+            font-size: 12px;
+            color: #6b7280;
+        }
+
+        .token-status-box .value {
+            font-size: 14px;
+            font-weight: 600;
+        }
+
+        .token-status-box .value.valid {
+            color: #34d399;
+        }
+        .token-status-box .value.invalid {
+            color: #f87171;
+        }
+        .token-status-box .value.warning {
+            color: #fbbf24;
+        }
+
+        /* ---- Quick Actions ---- */
+        .quick-actions {
+            display: flex;
+            gap: 8px;
+            margin-top: 12px;
+            flex-wrap: wrap;
+        }
+
+        .quick-actions .btn-outline {
+            flex: 1;
+            padding: 8px 12px;
+            background: transparent;
+            border: 1px solid rgba(255, 255, 255, 0.06);
+            border-radius: 8px;
+            color: #9ca3af;
+            font-size: 13px;
+            font-weight: 500;
+            cursor: pointer;
+            transition: all 0.2s;
+            font-family: inherit;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 6px;
+        }
+
+        .quick-actions .btn-outline:hover {
+            background: rgba(255, 255, 255, 0.04);
+            border-color: rgba(255, 255, 255, 0.12);
+        }
+
+        .quick-actions .btn-outline.danger:hover {
+            border-color: #f87171;
+            color: #f87171;
+        }
+
+        /* ====================================================
+                   RIGHT CARD — API KEYS
+                ==================================================== */
+        .keys-card {
+            background: rgba(255, 255, 255, 0.02);
+            border-radius: 18px;
+            padding: 24px;
+            border: 1px solid rgba(255, 255, 255, 0.04);
+        }
+
+        .keys-card .card-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: flex-start;
+            flex-wrap: wrap;
+            gap: 12px;
+            margin-bottom: 18px;
+        }
+
+        .keys-card .card-header h2 {
+            font-size: 16px;
+            font-weight: 600;
+            color: #d1d5db;
+        }
+
+        .keys-card .card-header .sub {
+            font-size: 13px;
+            color: #6b7280;
+        }
+
+        .key-gen-form {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 10px;
+            margin-bottom: 20px;
+            padding: 16px;
+            background: rgba(255, 255, 255, 0.02);
+            border-radius: 14px;
+            border: 1px dashed rgba(255, 255, 255, 0.06);
+        }
+
+        .key-gen-form input {
+            flex: 1;
+            min-width: 140px;
+            padding: 9px 14px;
+            background: rgba(255, 255, 255, 0.04);
+            border: 1px solid rgba(255, 255, 255, 0.06);
+            border-radius: 8px;
+            color: #eaeef2;
+            font-size: 13px;
+            font-family: inherit;
+        }
+
+        .key-gen-form input:focus {
+            outline: none;
+            border-color: #667eea;
+        }
+
+        .key-gen-form input::placeholder {
+            color: #4b5563;
+        }
+
+        .key-gen-form .btn-generate {
+            padding: 9px 20px;
+            border: none;
+            border-radius: 8px;
+            background: linear-gradient(135deg, #34d399, #059669);
+            color: #0b0b1a;
+            font-weight: 600;
+            font-size: 13px;
+            cursor: pointer;
+            transition: all 0.2s;
+            font-family: inherit;
+            display: flex;
+            align-items: center;
+            gap: 6px;
+            white-space: nowrap;
+        }
+
+        .key-gen-form .btn-generate:hover {
+            transform: translateY(-1px);
+            box-shadow: 0 8px 24px rgba(52, 211, 153, 0.25);
+        }
+
+        /* ---- Keys Table ---- */
+        .keys-table-wrap {
+            overflow-x: auto;
+            border-radius: 12px;
+            border: 1px solid rgba(255, 255, 255, 0.04);
+        }
+
+        .keys-table {
+            width: 100%;
+            border-collapse: collapse;
+            font-size: 13px;
+        }
+
+        .keys-table th {
+            text-align: left;
+            padding: 12px 14px;
+            color: #6b7280;
+            font-weight: 500;
+            font-size: 11px;
+            text-transform: uppercase;
+            letter-spacing: 0.4px;
+            border-bottom: 1px solid rgba(255, 255, 255, 0.04);
+            background: rgba(255, 255, 255, 0.02);
+        }
+
+        .keys-table td {
+            padding: 12px 14px;
+            border-bottom: 1px solid rgba(255, 255, 255, 0.03);
+            vertical-align: middle;
+        }
+
+        .keys-table tr:last-child td {
+            border-bottom: none;
+        }
+
+        .keys-table .key-mask {
+            font-family: 'Monaco', 'Courier New', monospace;
+            font-size: 12px;
+            color: #9ca3af;
+            background: rgba(255, 255, 255, 0.04);
+            padding: 3px 10px;
+            border-radius: 6px;
+            display: inline-block;
+        }
+
+        .keys-table .badge-active {
+            color: #34d399;
+            font-weight: 500;
+        }
+
+        .keys-table .badge-inactive {
+            color: #6b7280;
+        }
+
+        .keys-table .badge-expired {
+            color: #f87171;
+        }
+
+        .keys-table .actions-cell {
+            display: flex;
+            gap: 6px;
+            flex-wrap: wrap;
+        }
+
+        .keys-table .actions-cell button {
+            padding: 4px 10px;
+            border: none;
+            border-radius: 6px;
+            font-size: 11px;
+            font-weight: 500;
+            cursor: pointer;
+            transition: all 0.2s;
+            font-family: inherit;
+            background: rgba(255, 255, 255, 0.04);
+            color: #9ca3af;
+        }
+
+        .keys-table .actions-cell button:hover {
+            background: rgba(255, 255, 255, 0.08);
+        }
+
+        .keys-table .actions-cell button.copy-btn:hover {
+            color: #60a5fa;
+        }
+        .keys-table .actions-cell button.revoke-btn:hover {
+            color: #f87171;
+        }
+        .keys-table .actions-cell button.regen-btn:hover {
+            color: #fbbf24;
+        }
+
+        .empty-state {
+            text-align: center;
+            padding: 32px 16px;
+            color: #4b5563;
+        }
+
+        .empty-state i {
+            font-size: 32px;
+            margin-bottom: 8px;
+            opacity: 0.4;
+            display: block;
+        }
+
+        /* ====================================================
+                   LOGS SECTION
+                ==================================================== */
+        .logs-section {
+            padding: 0 32px 32px;
+        }
+
+        .logs-section .log-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 14px;
+        }
+
+        .logs-section .log-header h3 {
+            font-size: 14px;
+            font-weight: 600;
+            color: #9ca3af;
+        }
+
+        .logs-section .log-header .log-count {
+            font-size: 12px;
+            color: #4b5563;
+        }
+
+        .log-list {
+            background: rgba(255, 255, 255, 0.02);
+            border-radius: 14px;
+            border: 1px solid rgba(255, 255, 255, 0.04);
+            max-height: 180px;
+            overflow-y: auto;
+            padding: 4px 0;
+        }
+
+        .log-item {
+            display: flex;
+            align-items: center;
+            gap: 16px;
+            padding: 8px 16px;
+            border-bottom: 1px solid rgba(255, 255, 255, 0.02);
+            font-size: 13px;
+            color: #9ca3af;
+        }
+
+        .log-item:last-child {
+            border-bottom: none;
+        }
+
+        .log-item .log-time {
+            color: #4b5563;
+            font-size: 12px;
+            min-width: 140px;
+        }
+
+        .log-item .log-status {
+            font-weight: 500;
+            min-width: 40px;
+        }
+
+        .log-item .log-status.ok {
+            color: #34d399;
+        }
+        .log-item .log-status.err {
+            color: #f87171;
+        }
+
+        .log-item .log-endpoint {
+            color: #d1d5db;
+            font-family: 'Monaco', 'Courier New', monospace;
+            font-size: 12px;
+        }
+
+        .log-item .log-key {
+            font-size: 11px;
+            color: #4b5563;
+            margin-left: auto;
+        }
+
+        /* ====================================================
+                   MESSAGES / TOASTS
+                ==================================================== */
+        .msg {
+            padding: 12px 16px;
+            border-radius: 10px;
+            font-size: 13px;
+            display: none;
+            margin-top: 12px;
+        }
+
+        .msg.show {
+            display: block;
+        }
+
+        .msg.success {
+            background: rgba(52, 211, 153, 0.08);
+            border: 1px solid rgba(52, 211, 153, 0.15);
+            color: #34d399;
+        }
+
+        .msg.error {
+            background: rgba(248, 113, 113, 0.08);
+            border: 1px solid rgba(248, 113, 113, 0.15);
+            color: #f87171;
+        }
+
+        .msg.info {
+            background: rgba(251, 191, 36, 0.08);
+            border: 1px solid rgba(251, 191, 36, 0.15);
+            color: #fbbf24;
+        }
+
+        /* ====================================================
+                   SCROLLBAR
+                ==================================================== */
+        .log-list::-webkit-scrollbar {
+            width: 4px;
+        }
+        .log-list::-webkit-scrollbar-track {
+            background: transparent;
+        }
+        .log-list::-webkit-scrollbar-thumb {
+            background: #2a2a4a;
+            border-radius: 4px;
+        }
+
+        /* ====================================================
+                   RESPONSIVE
+                ==================================================== */
+        @media (max-width: 640px) {
+            .header {
+                padding: 16px 20px;
+            }
+            .main-grid {
+                padding: 16px;
+            }
+            .logs-section {
+                padding: 0 16px 24px;
+            }
+            .key-gen-form {
+                flex-direction: column;
+            }
+            .key-gen-form input {
+                min-width: auto;
+            }
+            .log-item {
+                flex-wrap: wrap;
+                gap: 4px;
+            }
+            .log-item .log-time {
+                min-width: auto;
+                font-size: 11px;
+            }
+            .log-item .log-key {
+                margin-left: 0;
+                width: 100%;
+            }
+            .token-status-box {
+                flex-direction: column;
+                align-items: stretch;
+                text-align: center;
+            }
+        }
+    </style>
 </head>
 <body>
-    <!-- [FULL DASHBOARD HTML FROM PREVIOUS RESPONSE] -->
+
+    <div class="app">
+
+        <!-- ====================================================
+        GLASS CONTAINER
+        ==================================================== -->
+        <div class="glass">
+
+            <!-- ========== HEADER ========== -->
+            <header class="header">
+                <div class="logo-area">
+                    <div class="logo-icon">⚡</div>
+                    <div class="logo-text">SEP X <span>· API Gateway</span></div>
+                </div>
+                <div class="header-actions">
+                    <div class="status-pill" id="statusPill">
+                        <span class="dot offline" id="statusDot"></span>
+                        <span id="statusLabel">Disconnected</span>
+                    </div>
+                    <button class="btn-outline" style="padding:6px 14px;border:1px solid rgba(255,255,255,0.06);border-radius:8px;background:transparent;color:#9ca3af;cursor:pointer;font-family:inherit;font-size:13px;" onclick="checkStatus()">
+                        <i class="fas fa-sync-alt"></i>
+                    </button>
+                </div>
+            </header>
+
+            <!-- ========== MAIN GRID ========== -->
+            <div class="main-grid">
+
+                <!-- ===== LEFT: AUTH ===== -->
+                <div class="auth-card">
+
+                    <h2>🔐 Connect to DeepSeek</h2>
+                    <div class="sub"><i class="fas fa-info-circle"></i> Sign in once to enable API access</div>
+
+                    <!-- Google Sign-In -->
+                    <button class="google-btn" id="googleSignInBtn" onclick="loginWithGoogle()">
+                        <svg width="22" height="22" viewBox="0 0 48 48">
+                            <path fill="#FFC107" d="M43.611,20.083H42V20H24v8h11.303c-1.649,4.657-6.08,8-11.303,8c-6.627,0-12-5.373-12-12c0-6.627,5.373-12,12-12c3.059,0,5.842,1.154,7.961,3.039l5.657-5.657C34.046,6.053,29.268,4,24,4C12.955,4,4,12.955,4,24c0,11.045,8.955,20,20,20c11.045,0,20-8.955,20-20C44,22.659,43.862,21.35,43.611,20.083z"/>
+                            <path fill="#FF3D00" d="M6.306,14.691l6.571,4.819C14.655,15.108,18.961,12,24,12c3.059,0,5.842,1.154,7.961,3.039l5.657-5.657C34.046,6.053,29.268,4,24,4C16.318,4,9.656,8.337,6.306,14.691z"/>
+                            <path fill="#4CAF50" d="M24,44c5.166,0,9.86-1.977,13.409-5.192l-6.19-5.238C29.211,35.091,26.715,36,24,36c-5.202,0-9.619-3.317-11.283-7.946l-6.522,5.025C9.505,39.556,16.227,44,24,44z"/>
+                            <path fill="#1976D2" d="M43.611,20.083H42V20H24v8h11.303c-0.792,2.237-2.231,4.166-4.087,5.571c0.001-0.001,0.002-0.001,0.003-0.002l6.19,5.238C36.971,39.205,44,34,44,24C44,22.659,43.862,21.35,43.611,20.083z"/>
+                        </svg>
+                        Sign in with Google
+                    </button>
+
+                    <div class="divider">or use email</div>
+
+                    <!-- Email/Password Form -->
+                    <form class="auth-form" id="loginForm" onsubmit="event.preventDefault(); loginWithEmail();">
+                        <div class="field">
+                            <label for="emailInput">Email</label>
+                            <input type="email" id="emailInput" placeholder="your@email.com" autocomplete="email" />
+                        </div>
+                        <div class="field">
+                            <label for="passwordInput">Password</label>
+                            <input type="password" id="passwordInput" placeholder="••••••••" autocomplete="current-password" />
+                        </div>
+                        <button type="submit" class="btn-primary" id="loginBtn">
+                            <i class="fas fa-key"></i> &nbsp;Connect
+                        </button>
+                    </form>
+
+                    <!-- Status / Message -->
+                    <div id="authMsg" class="msg"></div>
+
+                    <!-- Token Status Mini -->
+                    <div class="token-status-box">
+                        <div>
+                            <div class="label">Token Status</div>
+                            <div class="value invalid" id="tokenMiniStatus">No token</div>
+                        </div>
+                        <div>
+                            <div class="label">Expires</div>
+                            <div class="value" id="tokenMiniExpiry" style="color:#6b7280;">—</div>
+                        </div>
+                        <div>
+                            <div class="label">User</div>
+                            <div class="value" id="tokenMiniUser" style="color:#6b7280;font-size:13px;">default</div>
+                        </div>
+                    </div>
+
+                    <!-- Quick Actions -->
+                    <div class="quick-actions">
+                        <button class="btn-outline" onclick="checkStatus()">
+                            <i class="fas fa-sync-alt"></i> Refresh
+                        </button>
+                        <button class="btn-outline danger" onclick="logout()">
+                            <i class="fas fa-sign-out-alt"></i> Logout
+                        </button>
+                    </div>
+
+                </div>
+
+                <!-- ===== RIGHT: API KEYS ===== -->
+                <div class="keys-card">
+
+                    <div class="card-header">
+                        <div>
+                            <h2><i class="fas fa-key" style="color:#667eea;margin-right:8px;"></i>API Keys</h2>
+                            <div class="sub">Manage access for your applications</div>
+                        </div>
+                    </div>
+
+                    <!-- Generate Key Form -->
+                    <div class="key-gen-form">
+                        <input type="text" id="keyNameInput" placeholder="Key name (e.g. Production)" value="My Key" />
+                        <input type="number" id="rateLimitInput" placeholder="Rate limit /hour" value="30" style="max-width:130px;" />
+                        <input type="number" id="expiresDaysInput" placeholder="Expires (days)" value="30" style="max-width:130px;" />
+                        <button class="btn-generate" onclick="createAPIKey()">
+                            <i class="fas fa-plus-circle"></i> Generate
+                        </button>
+                    </div>
+
+                    <!-- API Keys Table -->
+                    <div class="keys-table-wrap">
+                        <table class="keys-table">
+                            <thead>
+                                <tr>
+                                    <th>Key</th>
+                                    <th>Name</th>
+                                    <th>Limit</th>
+                                    <th>Used</th>
+                                    <th>Status</th>
+                                    <th style="text-align:right;">Actions</th>
+                                </tr>
+                            </thead>
+                            <tbody id="apiKeysBody">
+                                <tr>
+                                    <td colspan="6">
+                                        <div class="empty-state">
+                                            <i class="fas fa-key"></i>
+                                            No API keys yet — generate one above
+                                        </div>
+                                    </td>
+                                </tr>
+                            </tbody>
+                        </table>
+                    </div>
+
+                </div>
+            </div>
+
+            <!-- ========== LOGS ========== -->
+            <div class="logs-section">
+                <div class="log-header">
+                    <h3><i class="fas fa-history" style="margin-right:8px;color:#4b5563;"></i>Recent Activity</h3>
+                    <span class="log-count" id="logCount">0 requests</span>
+                </div>
+                <div class="log-list" id="logList">
+                    <div style="padding:20px;text-align:center;color:#4b5563;font-size:14px;">
+                        <i class="fas fa-inbox" style="display:block;font-size:24px;margin-bottom:6px;opacity:0.3;"></i>
+                        No requests yet
+                    </div>
+                </div>
+            </div>
+
+        </div>
+        <!-- end glass -->
+
+    </div>
+
+    <!-- ============================================================
+    JAVASCRIPT
+    ============================================================ -->
+    <script>
+        // ======================== CONFIG ========================
+        const USER_ID = 'default';
+        let tokenValid = false;
+        let apiKeys = [];
+
+        // ======================== DOM REFS ========================
+        const $ = id => document.getElementById(id);
+        const statusDot = $('statusDot');
+        const statusLabel = $('statusLabel');
+        const tokenMiniStatus = $('tokenMiniStatus');
+        const tokenMiniExpiry = $('tokenMiniExpiry');
+        const tokenMiniUser = $('tokenMiniUser');
+        const authMsg = $('authMsg');
+        const apiKeysBody = $('apiKeysBody');
+        const logList = $('logList');
+        const logCount = $('logCount');
+        const loginBtn = $('loginBtn');
+
+        // ======================== INIT ========================
+        document.addEventListener('DOMContentLoaded', () => {
+            tokenMiniUser.textContent = USER_ID;
+            checkStatus();
+            loadAPIKeys();
+            loadLogs();
+
+            // Auto-refresh every 30s
+            setInterval(() => {
+                if (document.visibilityState === 'visible') {
+                    loadAPIKeys();
+                    loadLogs();
+                }
+            }, 30000);
+        });
+
+        // ======================== GOOGLE SIGN-IN ========================
+
+        function loginWithGoogle() {
+            showAuthMsg('Initiating Google Sign-In...', 'info');
+
+            // Open Google OAuth popup
+            const width = 500;
+            const height = 620;
+            const left = window.screenX + (window.outerWidth - width) / 2;
+            const top = window.screenY + (window.outerHeight - height) / 2;
+
+            const popup = window.open(
+                `/auth/google?user_id=${USER_ID}`,
+                'Google Sign-In',
+                `width=${width},height=${height},left=${left},top=${top}`
+            );
+
+            // Listen for postMessage from popup
+            window.addEventListener('message', function handler(event) {
+                if (event.data && event.data.type === 'google_auth_callback') {
+                    window.removeEventListener('message', handler);
+                    popup.close();
+
+                    if (event.data.success) {
+                        showAuthMsg('✅ Google authentication successful! Token stored.', 'success');
+                        checkStatus();
+                    } else {
+                        showAuthMsg('❌ Google auth failed: ' + (event.data.error || 'Unknown error'), 'error');
+                    }
+                }
+            });
+        }
+
+        // ======================== EMAIL LOGIN ========================
+
+        async function loginWithEmail() {
+            const email = $('emailInput').value.trim();
+            const password = $('passwordInput').value;
+
+            if (!email || !password) {
+                showAuthMsg('Please enter email and password', 'error');
+                return;
+            }
+
+            loginBtn.disabled = true;
+            loginBtn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Connecting...';
+            showAuthMsg('Authenticating with DeepSeek...', 'info');
+
+            try {
+                const res = await fetch('/api/login', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ email, password, user_id: USER_ID })
+                });
+
+                const data = await res.json();
+
+                if (data.success) {
+                    showAuthMsg('✅ Connected successfully! Token stored.', 'success');
+                    checkStatus();
+                    // Save email for convenience
+                    localStorage.setItem('sep_x_email', email);
+                } else {
+                    showAuthMsg('❌ ' + (data.error || 'Login failed'), 'error');
+                }
+            } catch (err) {
+                showAuthMsg('❌ Error: ' + err.message, 'error');
+            }
+
+            loginBtn.disabled = false;
+            loginBtn.innerHTML = '<i class="fas fa-key"></i> &nbsp;Connect';
+        }
+
+        // ======================== STATUS ========================
+
+        async function checkStatus() {
+            statusDot.className = 'dot checking';
+            statusLabel.textContent = 'Checking...';
+
+            try {
+                const res = await fetch(`/api/token/status?user_id=${USER_ID}`);
+                const data = await res.json();
+
+                if (data.token_exists && data.is_valid) {
+                    tokenValid = true;
+                    statusDot.className = 'dot online';
+                    statusLabel.textContent = 'Connected';
+                    tokenMiniStatus.textContent = '✅ Valid';
+                    tokenMiniStatus.className = 'value valid';
+
+                    const days = data.expires_in_days || 0;
+                    if (days > 2) {
+                        tokenMiniExpiry.textContent = Math.ceil(days) + ' days';
+                        tokenMiniExpiry.style.color = '#34d399';
+                    } else if (days > 0) {
+                        tokenMiniExpiry.textContent = Math.ceil(days) + ' days ⚠️';
+                        tokenMiniExpiry.style.color = '#fbbf24';
+                    } else {
+                        tokenMiniExpiry.textContent = 'EXPIRED';
+                        tokenMiniExpiry.style.color = '#f87171';
+                    }
+                } else {
+                    tokenValid = false;
+                    statusDot.className = 'dot offline';
+                    statusLabel.textContent = 'Disconnected';
+                    tokenMiniStatus.textContent = '❌ No token';
+                    tokenMiniStatus.className = 'value invalid';
+                    tokenMiniExpiry.textContent = '—';
+                    tokenMiniExpiry.style.color = '#6b7280';
+                }
+            } catch (err) {
+                statusDot.className = 'dot offline';
+                statusLabel.textContent = 'Error';
+                tokenMiniStatus.textContent = '⚠️ Error';
+                tokenMiniStatus.className = 'value invalid';
+            }
+        }
+
+        // ======================== API KEY MANAGEMENT ========================
+
+        async function createAPIKey() {
+            const name = $('keyNameInput').value.trim() || 'My Key';
+            const rate_limit = parseInt($('rateLimitInput').value) || 30;
+            const expires_days = parseInt($('expiresDaysInput').value) || 30;
+
+            try {
+                const res = await fetch('/api/keys', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        user_id: USER_ID,
+                        name,
+                        description: 'Generated via dashboard',
+                        rate_limit,
+                        expires_days
+                    })
+                });
+
+                const data = await res.json();
+
+                if (data.success) {
+                    showAuthMsg('✅ API Key generated: <code style="background:#1a1a2e;padding:2px 8px;border-radius:4px;font-family:monospace;">' +
+                        data.key_full + '</code>', 'success');
+                    loadAPIKeys();
+                } else {
+                    showAuthMsg('❌ ' + (data.error || 'Failed to generate key'), 'error');
+                }
+            } catch (err) {
+                showAuthMsg('❌ ' + err.message, 'error');
+            }
+        }
+
+        async function loadAPIKeys() {
+            try {
+                const res = await fetch(`/api/keys?user_id=${USER_ID}`);
+                const keys = await res.json();
+                apiKeys = keys;
+
+                if (keys.length === 0) {
+                    apiKeysBody.innerHTML = `
+                                <tr><td colspan="6">
+                                    <div class="empty-state">
+                                        <i class="fas fa-key"></i>
+                                        No API keys yet — generate one above
+                                    </div>
+                                </td></tr>
+                            `;
+                    return;
+                }
+
+                apiKeysBody.innerHTML = keys.map(k => `
+                            <tr>
+                                <td><span class="key-mask">${k.key}</span></td>
+                                <td>${k.name || 'Unnamed'}</td>
+                                <td>${k.rate_limit}/h</td>
+                                <td>${k.requests_count}</td>
+                                <td>
+                                    ${k.is_active
+                                        ? (k.expires_at && new Date(k.expires_at) < new Date()
+                                            ? '<span class="badge-expired">Expired</span>'
+                                            : '<span class="badge-active">● Active</span>')
+                                        : '<span class="badge-inactive">● Revoked</span>'
+                                    }
+                                </td>
+                                <td style="text-align:right;">
+                                    <div class="actions-cell" style="justify-content:flex-end;">
+                                        <button class="copy-btn" onclick="copyKey('${k.key_full}')">
+                                            <i class="fas fa-copy"></i>
+                                        </button>
+                                        ${k.is_active ? `
+                                            <button class="revoke-btn" onclick="revokeKey(${k.id})">
+                                                <i class="fas fa-ban"></i>
+                                            </button>
+                                        ` : ''}
+                                        <button class="regen-btn" onclick="regenerateKey(${k.id})">
+                                            <i class="fas fa-sync-alt"></i>
+                                        </button>
+                                    </div>
+                                </td>
+                            </tr>
+                        `).join('');
+
+            } catch (err) {
+                console.error('Load API keys error:', err);
+            }
+        }
+
+        async function revokeKey(keyId) {
+            if (!confirm('Revoke this API key? It will stop working immediately.')) return;
+            try {
+                const res = await fetch(`/api/keys/${keyId}`, { method: 'DELETE' });
+                const data = await res.json();
+                if (data.success) {
+                    showAuthMsg('✅ API key revoked', 'success');
+                    loadAPIKeys();
+                }
+            } catch (err) {
+                showAuthMsg('❌ ' + err.message, 'error');
+            }
+        }
+
+        async function regenerateKey(keyId) {
+            if (!confirm('Regenerate this API key? The old one will be invalidated.')) return;
+            try {
+                const res = await fetch(`/api/keys/${keyId}/regenerate`, { method: 'POST' });
+                const data = await res.json();
+                if (data.success) {
+                    showAuthMsg('✅ New API Key: <code style="background:#1a1a2e;padding:2px 8px;border-radius:4px;font-family:monospace;">' +
+                        data.new_key + '</code>', 'success');
+                    loadAPIKeys();
+                }
+            } catch (err) {
+                showAuthMsg('❌ ' + err.message, 'error');
+            }
+        }
+
+        function copyKey(key) {
+            navigator.clipboard.writeText(key);
+            showAuthMsg('📋 API key copied to clipboard!', 'success');
+            setTimeout(() => {
+                const el = $('authMsg');
+                if (el) el.className = 'msg';
+            }, 3000);
+        }
+
+        // ======================== LOGS ========================
+
+        async function loadLogs() {
+            try {
+                const res = await fetch(`/api/logs?user_id=${USER_ID}&limit=20`);
+                const logs = await res.json();
+
+                logCount.textContent = logs.length + ' requests';
+
+                if (logs.length === 0) {
+                    logList.innerHTML = `
+                                <div style="padding:20px;text-align:center;color:#4b5563;font-size:14px;">
+                                    <i class="fas fa-inbox" style="display:block;font-size:24px;margin-bottom:6px;opacity:0.3;"></i>
+                                    No requests yet
+                                </div>
+                            `;
+                    return;
+                }
+
+                logList.innerHTML = logs.map(log => `
+                            <div class="log-item">
+                                <span class="log-time">${new Date(log.timestamp).toLocaleString()}</span>
+                                <span class="log-status ${log.status_code < 400 ? 'ok' : 'err'}">
+                                    ${log.status_code}
+                                </span>
+                                <span class="log-endpoint">${log.method} ${log.endpoint}</span>
+                                <span class="log-key">🔑 ${log.api_key || 'unknown'}</span>
+                            </div>
+                        `).join('');
+
+            } catch (err) {
+                console.error('Load logs error:', err);
+            }
+        }
+
+        // ======================== HELPERS ========================
+
+        function showAuthMsg(text, type) {
+            const el = $('authMsg');
+            if (!el) return;
+            el.innerHTML = text;
+            el.className = 'msg show ' + type;
+            if (type === 'success') {
+                setTimeout(() => { el.className = 'msg'; }, 6000);
+            }
+        }
+
+        function logout() {
+            if (!confirm('Logout? This will clear your session token.')) return;
+            tokenValid = false;
+            statusDot.className = 'dot offline';
+            statusLabel.textContent = 'Disconnected';
+            tokenMiniStatus.textContent = '❌ No token';
+            tokenMiniStatus.className = 'value invalid';
+            tokenMiniExpiry.textContent = '—';
+            tokenMiniExpiry.style.color = '#6b7280';
+            showAuthMsg('Logged out successfully', 'info');
+        }
+
+        // ======================== KEYBOARD SHORTCUTS ========================
+
+        document.addEventListener('keydown', (e) => {
+            if (e.key === 'Enter') {
+                const active = document.activeElement;
+                if (active && (active.id === 'emailInput' || active.id === 'passwordInput')) {
+                    e.preventDefault();
+                    loginWithEmail();
+                }
+            }
+        });
+    </script>
+
 </body>
 </html>
