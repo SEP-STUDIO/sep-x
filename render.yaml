@@ -1,0 +1,20 @@
+services:
+  - type: web
+    name: sep-x-api
+    env: python
+    buildCommand: pip install -r requirements.txt
+    startCommand: gunicorn app:app
+    envVars:
+      - key: FLASK_ENV
+        value: production
+      - key: SECRET_KEY
+        generateValue: true
+      - key: DATABASE_URL
+        fromDatabase:
+          name: sep-x-db
+          property: connectionString
+    databases:
+      - name: sep-x-db
+        databaseName: sep_x
+        user: sep_x_user
+    plan: free
