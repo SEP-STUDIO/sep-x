@@ -1,4 +1,4 @@
-from flask import Flask, jsonify, request, session, send_file
+from flask import Flask, jsonify, request, session
 from flask_cors import CORS
 from flask_sqlalchemy import SQLAlchemy
 from datetime import datetime, timedelta
@@ -10,7 +10,7 @@ import logging
 import os
 from functools import wraps
 from dotenv import load_dotenv
-import io
+from bs4 import BeautifulSoup
 
 load_dotenv()
 
@@ -161,8 +161,26 @@ def require_api_key(f):
 @app.route('/')
 def index():
     """Serve the dashboard HTML directly"""
-    with open('dashboard.html', 'r', encoding='utf-8') as f:
-        return f.read()
+    try:
+        with open('dashboard.html', 'r', encoding='utf-8') as f:
+            return f.read()
+    except FileNotFoundError:
+        return jsonify({
+            'service': 'SEP X - DeepSeek API Gateway',
+            'status': 'running',
+            'message': 'dashboard.html not found, but API is working',
+            'endpoints': {
+                'POST /api/login': 'Login to DeepSeek',
+                'GET /api/token/status': 'Check token status',
+                'POST /api/keys': 'Generate API key',
+                'GET /api/keys': 'List API keys',
+                'DELETE /api/keys/<id>': 'Revoke API key',
+                'POST /api/keys/<id>/regenerate': 'Regenerate API key',
+                'POST /v1/chat/completions': 'Chat with DeepSeek (requires X-API-Key)',
+                'POST /v1/chat/completions/stream': 'Stream chat (requires X-API-Key)',
+                'GET /api/logs': 'View API logs'
+            }
+        }), 200
 
 @app.route('/health')
 def health():
@@ -189,17 +207,25 @@ def login_to_deepseek():
         initial = session.get('https://chat.deepseek.com')
         csrf_token = extract_csrf(initial.text)
         
+        if not csrf_token:
+            logger.warning("Could not extract CSRF token, proceeding without it")
+        
         # Login
+        login_payload = {'email': email, 'password': password}
+        if csrf_token:
+            login_payload['csrf_token'] = csrf_token
+        
         login_response = session.post(
             'https://chat.deepseek.com/api/v0/auth/login',
-            json={'email': email, 'password': password, 'csrf_token': csrf_token},
+            json=login_payload,
             headers={'Content-Type': 'application/json'}
         )
         
         if login_response.status_code != 200:
             return jsonify({
                 'error': 'Login failed',
-                'details': login_response.text
+                'details': login_response.text,
+                'status_code': login_response.status_code
             }), 401
         
         login_data = login_response.json()
@@ -229,6 +255,9 @@ def login_to_deepseek():
             'expires_at': token.expires_at.isoformat()
         }), 200
         
+    except requests.exceptions.RequestException as e:
+        logger.error(f"Network error during login: {str(e)}")
+        return jsonify({'error': f'Network error: {str(e)}'}), 500
     except Exception as e:
         logger.error(f"Login error: {str(e)}")
         return jsonify({'error': str(e)}), 500
@@ -448,15 +477,40 @@ def get_logs():
 # ============ HELPER FUNCTIONS ============
 
 def extract_csrf(html):
+    """Extract CSRF token from HTML using html.parser"""
+    if not html:
+        return None
+    
+    # Try BeautifulSoup first
+    try:
+        soup = BeautifulSoup(html, 'html.parser')
+        
+        # Check meta tags
+        meta = soup.find('meta', {'name': 'csrf-token'})
+        if meta and meta.get('content'):
+            return meta.get('content')
+        
+        meta = soup.find('meta', {'name': 'csrf_token'})
+        if meta and meta.get('content'):
+            return meta.get('content')
+    except Exception as e:
+        logger.warning(f"BeautifulSoup parsing error: {e}")
+    
+    # Fallback: regex patterns
     patterns = [
         r'csrf_token["\']?\s*[:=]\s*["\']([^"\']+)["\']',
         r'X-CSRF-Token["\']?\s*[:=]\s*["\']([^"\']+)["\']',
-        r'window\.csrfToken\s*=\s*["\']([^"\']+)["\']'
+        r'window\.csrfToken\s*=\s*["\']([^"\']+)["\']',
+        r'csrfToken\s*=\s*["\']([^"\']+)["\']',
+        r'name=["\']csrf_token["\']\s+value=["\']([^"\']+)["\']',
+        r'name=["\']_csrf["\']\s+value=["\']([^"\']+)["\']'
     ]
+    
     for pattern in patterns:
-        match = re.search(pattern, html)
+        match = re.search(pattern, html, re.IGNORECASE)
         if match:
             return match.group(1)
+    
     return None
 
 @app.errorhandler(404)
