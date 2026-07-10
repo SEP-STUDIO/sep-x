@@ -1,16 +1,14 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
- <meta charset="UTF-8" />
+    <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>SEP X · DeepSeek API Gateway</title>
+
     <link href="https://fonts.googleapis.com/css2?family=Inter:opsz,wght@14..32,400;14..32,500;14..32,600;14..32,700&display=swap" rel="stylesheet" />
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.0/css/all.min.css" />
 
     <style>
-        /* ====================================================
-                   RESET & BASE
-                ==================================================== */
         * {
             margin: 0;
             padding: 0;
@@ -28,7 +26,6 @@
             padding: 24px;
         }
 
-        /* subtle radial glow */
         body::before {
             content: '';
             position: fixed;
@@ -45,9 +42,6 @@
             max-width: 1280px;
         }
 
-        /* ====================================================
-                   GLASS CARD
-                ==================================================== */
         .glass {
             background: rgba(22, 22, 44, 0.72);
             backdrop-filter: blur(18px);
@@ -57,9 +51,6 @@
             box-shadow: 0 25px 60px -12px rgba(0, 0, 0, 0.8);
         }
 
-        /* ====================================================
-                   HEADER
-                ==================================================== */
         .header {
             display: flex;
             align-items: center;
@@ -112,9 +103,6 @@
             flex-wrap: wrap;
         }
 
-        /* ====================================================
-                   STATUS PILL
-                ==================================================== */
         .status-pill {
             display: flex;
             align-items: center;
@@ -153,20 +141,10 @@
         }
 
         @keyframes pulse-dot {
-            0%,
-            100% {
-                opacity: 1;
-                transform: scale(1);
-            }
-            50% {
-                opacity: 0.4;
-                transform: scale(0.8);
-            }
+            0%, 100% { opacity: 1; transform: scale(1); }
+            50% { opacity: 0.4; transform: scale(0.8); }
         }
 
-        /* ====================================================
-                   MAIN GRID
-                ==================================================== */
         .main-grid {
             display: grid;
             grid-template-columns: 1fr 2fr;
@@ -181,9 +159,7 @@
             }
         }
 
-        /* ====================================================
-                   LEFT CARD — AUTH / TOKEN
-                ==================================================== */
+        /* ============ AUTH CARD ============ */
         .auth-card {
             background: rgba(255, 255, 255, 0.02);
             border-radius: 18px;
@@ -208,7 +184,6 @@
             margin-right: 6px;
         }
 
-        /* ---- Google Sign-In Button ---- */
         .google-btn {
             display: flex;
             align-items: center;
@@ -236,12 +211,11 @@
             transform: scale(0.98);
         }
 
-        .google-btn img {
+        .google-btn img, .google-btn svg {
             width: 22px;
             height: 22px;
         }
 
-        /* ---- Divider ---- */
         .divider {
             display: flex;
             align-items: center;
@@ -259,7 +233,6 @@
             background: rgba(255, 255, 255, 0.06);
         }
 
-        /* ---- Email/Password Form ---- */
         .auth-form .field {
             margin-bottom: 12px;
         }
@@ -322,7 +295,36 @@
             transform: none !important;
         }
 
-        /* ---- Token Status inside Auth Card ---- */
+        .msg {
+            padding: 12px 16px;
+            border-radius: 10px;
+            font-size: 13px;
+            display: none;
+            margin-top: 12px;
+        }
+
+        .msg.show {
+            display: block;
+        }
+
+        .msg.success {
+            background: rgba(52, 211, 153, 0.08);
+            border: 1px solid rgba(52, 211, 153, 0.15);
+            color: #34d399;
+        }
+
+        .msg.error {
+            background: rgba(248, 113, 113, 0.08);
+            border: 1px solid rgba(248, 113, 113, 0.15);
+            color: #f87171;
+        }
+
+        .msg.info {
+            background: rgba(251, 191, 36, 0.08);
+            border: 1px solid rgba(251, 191, 36, 0.15);
+            color: #fbbf24;
+        }
+
         .token-status-box {
             margin-top: 18px;
             padding: 14px 16px;
@@ -356,7 +358,6 @@
             color: #fbbf24;
         }
 
-        /* ---- Quick Actions ---- */
         .quick-actions {
             display: flex;
             gap: 8px;
@@ -392,9 +393,7 @@
             color: #f87171;
         }
 
-        /* ====================================================
-                   RIGHT CARD — API KEYS
-                ==================================================== */
+        /* ============ KEYS CARD ============ */
         .keys-card {
             background: rgba(255, 255, 255, 0.02);
             border-radius: 18px;
@@ -476,7 +475,6 @@
             box-shadow: 0 8px 24px rgba(52, 211, 153, 0.25);
         }
 
-        /* ---- Keys Table ---- */
         .keys-table-wrap {
             overflow-x: auto;
             border-radius: 12px;
@@ -580,9 +578,7 @@
             display: block;
         }
 
-        /* ====================================================
-                   LOGS SECTION
-                ==================================================== */
+        /* ============ LOGS ============ */
         .logs-section {
             padding: 0 32px 32px;
         }
@@ -658,56 +654,7 @@
             margin-left: auto;
         }
 
-        /* ====================================================
-                   MESSAGES / TOASTS
-                ==================================================== */
-        .msg {
-            padding: 12px 16px;
-            border-radius: 10px;
-            font-size: 13px;
-            display: none;
-            margin-top: 12px;
-        }
-
-        .msg.show {
-            display: block;
-        }
-
-        .msg.success {
-            background: rgba(52, 211, 153, 0.08);
-            border: 1px solid rgba(52, 211, 153, 0.15);
-            color: #34d399;
-        }
-
-        .msg.error {
-            background: rgba(248, 113, 113, 0.08);
-            border: 1px solid rgba(248, 113, 113, 0.15);
-            color: #f87171;
-        }
-
-        .msg.info {
-            background: rgba(251, 191, 36, 0.08);
-            border: 1px solid rgba(251, 191, 36, 0.15);
-            color: #fbbf24;
-        }
-
-        /* ====================================================
-                   SCROLLBAR
-                ==================================================== */
-        .log-list::-webkit-scrollbar {
-            width: 4px;
-        }
-        .log-list::-webkit-scrollbar-track {
-            background: transparent;
-        }
-        .log-list::-webkit-scrollbar-thumb {
-            background: #2a2a4a;
-            border-radius: 4px;
-        }
-
-        /* ====================================================
-                   RESPONSIVE
-                ==================================================== */
+        /* ============ RESPONSIVE ============ */
         @media (max-width: 640px) {
             .header {
                 padding: 16px 20px;
@@ -742,18 +689,26 @@
                 text-align: center;
             }
         }
+
+        /* Scrollbar */
+        .log-list::-webkit-scrollbar {
+            width: 4px;
+        }
+        .log-list::-webkit-scrollbar-track {
+            background: transparent;
+        }
+        .log-list::-webkit-scrollbar-thumb {
+            background: #2a2a4a;
+            border-radius: 4px;
+        }
     </style>
 </head>
 <body>
 
     <div class="app">
-
-        <!-- ====================================================
-        GLASS CONTAINER
-        ==================================================== -->
         <div class="glass">
 
-            <!-- ========== HEADER ========== -->
+            <!-- HEADER -->
             <header class="header">
                 <div class="logo-area">
                     <div class="logo-icon">⚡</div>
@@ -770,12 +725,11 @@
                 </div>
             </header>
 
-            <!-- ========== MAIN GRID ========== -->
+            <!-- MAIN GRID -->
             <div class="main-grid">
 
-                <!-- ===== LEFT: AUTH ===== -->
+                <!-- LEFT: AUTH -->
                 <div class="auth-card">
-
                     <h2>🔐 Connect to DeepSeek</h2>
                     <div class="sub"><i class="fas fa-info-circle"></i> Sign in once to enable API access</div>
 
@@ -792,7 +746,6 @@
 
                     <div class="divider">or use email</div>
 
-                    <!-- Email/Password Form -->
                     <form class="auth-form" id="loginForm" onsubmit="event.preventDefault(); loginWithEmail();">
                         <div class="field">
                             <label for="emailInput">Email</label>
@@ -807,10 +760,8 @@
                         </button>
                     </form>
 
-                    <!-- Status / Message -->
                     <div id="authMsg" class="msg"></div>
 
-                    <!-- Token Status Mini -->
                     <div class="token-status-box">
                         <div>
                             <div class="label">Token Status</div>
@@ -826,7 +777,6 @@
                         </div>
                     </div>
 
-                    <!-- Quick Actions -->
                     <div class="quick-actions">
                         <button class="btn-outline" onclick="checkStatus()">
                             <i class="fas fa-sync-alt"></i> Refresh
@@ -835,12 +785,10 @@
                             <i class="fas fa-sign-out-alt"></i> Logout
                         </button>
                     </div>
-
                 </div>
 
-                <!-- ===== RIGHT: API KEYS ===== -->
+                <!-- RIGHT: API KEYS -->
                 <div class="keys-card">
-
                     <div class="card-header">
                         <div>
                             <h2><i class="fas fa-key" style="color:#667eea;margin-right:8px;"></i>API Keys</h2>
@@ -848,7 +796,6 @@
                         </div>
                     </div>
 
-                    <!-- Generate Key Form -->
                     <div class="key-gen-form">
                         <input type="text" id="keyNameInput" placeholder="Key name (e.g. Production)" value="My Key" />
                         <input type="number" id="rateLimitInput" placeholder="Rate limit /hour" value="30" style="max-width:130px;" />
@@ -858,7 +805,6 @@
                         </button>
                     </div>
 
-                    <!-- API Keys Table -->
                     <div class="keys-table-wrap">
                         <table class="keys-table">
                             <thead>
@@ -883,11 +829,10 @@
                             </tbody>
                         </table>
                     </div>
-
                 </div>
             </div>
 
-            <!-- ========== LOGS ========== -->
+            <!-- LOGS -->
             <div class="logs-section">
                 <div class="log-header">
                     <h3><i class="fas fa-history" style="margin-right:8px;color:#4b5563;"></i>Recent Activity</h3>
@@ -902,20 +847,12 @@
             </div>
 
         </div>
-        <!-- end glass -->
-
     </div>
 
-    <!-- ============================================================
-    JAVASCRIPT
-    ============================================================ -->
     <script>
-        // ======================== CONFIG ========================
         const USER_ID = 'default';
         let tokenValid = false;
-        let apiKeys = [];
 
-        // ======================== DOM REFS ========================
         const $ = id => document.getElementById(id);
         const statusDot = $('statusDot');
         const statusLabel = $('statusLabel');
@@ -935,7 +872,6 @@
             loadAPIKeys();
             loadLogs();
 
-            // Auto-refresh every 30s
             setInterval(() => {
                 if (document.visibilityState === 'visible') {
                     loadAPIKeys();
@@ -949,7 +885,6 @@
         function loginWithGoogle() {
             showAuthMsg('Initiating Google Sign-In...', 'info');
 
-            // Open Google OAuth popup
             const width = 500;
             const height = 620;
             const left = window.screenX + (window.outerWidth - width) / 2;
@@ -961,20 +896,36 @@
                 `width=${width},height=${height},left=${left},top=${top}`
             );
 
-            // Listen for postMessage from popup
-            window.addEventListener('message', function handler(event) {
+            if (!popup) {
+                showAuthMsg('❌ Popup blocked. Please allow popups for this site.', 'error');
+                return;
+            }
+
+            const handler = function(event) {
                 if (event.data && event.data.type === 'google_auth_callback') {
                     window.removeEventListener('message', handler);
-                    popup.close();
-
+                    
                     if (event.data.success) {
                         showAuthMsg('✅ Google authentication successful! Token stored.', 'success');
                         checkStatus();
+                        loadAPIKeys();
                     } else {
                         showAuthMsg('❌ Google auth failed: ' + (event.data.error || 'Unknown error'), 'error');
                     }
+                    
+                    try { popup.close(); } catch(e) {}
                 }
-            });
+            };
+            
+            window.addEventListener('message', handler);
+            
+            setTimeout(() => {
+                window.removeEventListener('message', handler);
+                if (popup && !popup.closed) {
+                    popup.close();
+                    showAuthMsg('⏱️ Google sign-in timed out. Please try again.', 'error');
+                }
+            }, 60000);
         }
 
         // ======================== EMAIL LOGIN ========================
@@ -1004,7 +955,6 @@
                 if (data.success) {
                     showAuthMsg('✅ Connected successfully! Token stored.', 'success');
                     checkStatus();
-                    // Save email for convenience
                     localStorage.setItem('sep_x_email', email);
                 } else {
                     showAuthMsg('❌ ' + (data.error || 'Login failed'), 'error');
@@ -1100,7 +1050,6 @@
             try {
                 const res = await fetch(`/api/keys?user_id=${USER_ID}`);
                 const keys = await res.json();
-                apiKeys = keys;
 
                 if (keys.length === 0) {
                     apiKeysBody.innerHTML = `
@@ -1247,8 +1196,6 @@
             tokenMiniExpiry.style.color = '#6b7280';
             showAuthMsg('Logged out successfully', 'info');
         }
-
-        // ======================== KEYBOARD SHORTCUTS ========================
 
         document.addEventListener('keydown', (e) => {
             if (e.key === 'Enter') {
