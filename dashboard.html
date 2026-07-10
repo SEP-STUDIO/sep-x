@@ -880,53 +880,71 @@
             }, 30000);
         });
 
-        // ======================== GOOGLE SIGN-IN ========================
+       // ======================== GOOGLE SIGN-IN ========================
 
-        function loginWithGoogle() {
-            showAuthMsg('Initiating Google Sign-In...', 'info');
+function loginWithGoogle() {
+    showAuthMsg('🔐 Opening Google Sign-In...', 'info');
 
-            const width = 500;
-            const height = 620;
-            const left = window.screenX + (window.outerWidth - width) / 2;
-            const top = window.screenY + (window.outerHeight - height) / 2;
+    // Open in a new window with the embedded auth page
+    const width = 480;
+    const height = 700;
+    const left = window.screenX + (window.outerWidth - width) / 2;
+    const top = window.screenY + (window.outerHeight - height) / 2;
 
-            const popup = window.open(
-                `/auth/google?user_id=${USER_ID}`,
-                'Google Sign-In',
-                `width=${width},height=${height},left=${left},top=${top}`
-            );
+    const popup = window.open(
+        `/auth/google?user_id=${USER_ID}`,
+        'Google Sign-In',
+        `width=${width},height=${height},left=${left},top=${top},scrollbars=yes`
+    );
 
-            if (!popup) {
-                showAuthMsg('❌ Popup blocked. Please allow popups for this site.', 'error');
-                return;
+    if (!popup) {
+        showAuthMsg('❌ Popup blocked. Please allow popups for this site.', 'error');
+        return;
+    }
+
+    // Listen for messages from the popup
+    const handler = function(event) {
+        if (event.data && event.data.type === 'google_auth_callback') {
+            window.removeEventListener('message', handler);
+            
+            if (event.data.success) {
+                showAuthMsg('✅ Google authentication successful! Token stored.', 'success');
+                checkStatus();
+                loadAPIKeys();
+            } else {
+                showAuthMsg('❌ Google auth failed: ' + (event.data.error || 'Unknown error'), 'error');
             }
-
-            const handler = function(event) {
-                if (event.data && event.data.type === 'google_auth_callback') {
-                    window.removeEventListener('message', handler);
-                    
-                    if (event.data.success) {
-                        showAuthMsg('✅ Google authentication successful! Token stored.', 'success');
-                        checkStatus();
-                        loadAPIKeys();
-                    } else {
-                        showAuthMsg('❌ Google auth failed: ' + (event.data.error || 'Unknown error'), 'error');
-                    }
-                    
-                    try { popup.close(); } catch(e) {}
-                }
-            };
             
-            window.addEventListener('message', handler);
-            
-            setTimeout(() => {
-                window.removeEventListener('message', handler);
+            try { 
                 if (popup && !popup.closed) {
                     popup.close();
-                    showAuthMsg('⏱️ Google sign-in timed out. Please try again.', 'error');
                 }
-            }, 60000);
+            } catch(e) {}
         }
+    };
+    
+    window.addEventListener('message', handler);
+    
+    // Poll to check if popup closed without auth
+    const checkPopupClosed = setInterval(() => {
+        if (popup.closed) {
+            clearInterval(checkPopupClosed);
+            window.removeEventListener('message', handler);
+            // Don't show error if already authenticated
+            showAuthMsg('⏱️ Authentication window closed. If you completed login, click Refresh.', 'info');
+        }
+    }, 1000);
+    
+    // Timeout after 5 minutes
+    setTimeout(() => {
+        clearInterval(checkPopupClosed);
+        window.removeEventListener('message', handler);
+        if (popup && !popup.closed) {
+            popup.close();
+            showAuthMsg('⏱️ Google sign-in timed out. Please try again.', 'error');
+        }
+    }, 300000);
+}
 
         // ======================== EMAIL LOGIN ========================
 
