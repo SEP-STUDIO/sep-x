@@ -19,9 +19,12 @@ app.config['SECRET_KEY'] = os.getenv('SECRET_KEY', 'dev-secret-key-change-in-pro
 app.config['SQLALCHEMY_DATABASE_URI'] = os.getenv('DATABASE_URL', 'sqlite:///sep_x.db')
 app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
 app.config['JSON_SORT_KEYS'] = False
+app.config['SESSION_COOKIE_SECURE'] = True
+app.config['SESSION_COOKIE_HTTPONLY'] = True
+app.config['PERMANENT_SESSION_LIFETIME'] = timedelta(hours=24)
 
 db = SQLAlchemy(app)
-CORS(app)
+CORS(app, supports_credentials=True)
 
 # ============ LOGGING ============
 logging.basicConfig(
@@ -170,7 +173,8 @@ def index():
             'status': 'running',
             'message': 'dashboard.html not found, but API is working',
             'endpoints': {
-                'POST /api/login': 'Login to DeepSeek',
+                'POST /api/login': 'Login to DeepSeek (email/password)',
+                'GET /auth/google': 'Google Sign-In',
                 'GET /api/token/status': 'Check token status',
                 'POST /api/keys': 'Generate API key',
                 'GET /api/keys': 'List API keys',
@@ -473,6 +477,314 @@ def get_logs():
         'ip': log.ip_address,
         'api_key': log.api_key.key[:8] if log.api_key else None
     } for log in logs]), 200
+
+# ============ GOOGLE OAUTH ROUTES ============
+
+@app.route('/auth/google', methods=['GET'])
+def google_auth():
+    """Initiate Google OAuth flow"""
+    user_id = request.args.get('user_id', 'default')
+    session['oauth_user_id'] = user_id
+    
+    return render_google_auth_page(user_id)
+
+def render_google_auth_page(user_id):
+    """Render the Google auth redirect page"""
+    google_auth_url = 'https://chat.deepseek.com/auth/google'
+    
+    return f'''
+    <!DOCTYPE html>
+    <html>
+    <head>
+        <meta charset="UTF-8">
+        <meta name="viewport" content="width=device-width, initial-scale=1.0">
+        <title>Sign in with Google</title>
+        <style>
+            body {{
+                font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+                background: #0b0b1a;
+                display: flex;
+                align-items: center;
+                justify-content: center;
+                min-height: 100vh;
+                margin: 0;
+                padding: 20px;
+            }}
+            .container {{
+                text-align: center;
+                max-width: 400px;
+            }}
+            .spinner {{
+                width: 48px;
+                height: 48px;
+                border: 4px solid rgba(255,255,255,0.05);
+                border-top-color: #667eea;
+                border-radius: 50%;
+                animation: spin 0.8s linear infinite;
+                margin: 0 auto 20px;
+            }}
+            @keyframes spin {{
+                to {{ transform: rotate(360deg); }}
+            }}
+            h3 {{
+                color: #eaeef2;
+                font-weight: 500;
+                font-size: 18px;
+                margin: 0 0 8px;
+            }}
+            p {{
+                color: #6b7280;
+                font-size: 14px;
+                margin: 0;
+            }}
+            .btn {{
+                margin-top: 20px;
+                padding: 10px 24px;
+                border: none;
+                border-radius: 10px;
+                background: linear-gradient(135deg, #667eea, #764ba2);
+                color: white;
+                font-weight: 600;
+                font-size: 14px;
+                cursor: pointer;
+                font-family: inherit;
+            }}
+            .btn:hover {{
+                transform: translateY(-1px);
+                box-shadow: 0 8px 24px rgba(102, 126, 234, 0.3);
+            }}
+            .error {{
+                color: #f87171;
+                margin-top: 12px;
+                font-size: 14px;
+                display: none;
+            }}
+        </style>
+    </head>
+    <body>
+        <div class="container">
+            <div class="spinner"></div>
+            <h3>Redirecting to Google</h3>
+            <p>You'll be asked to sign in to your Google account</p>
+            <div id="errorMsg" class="error"></div>
+            <button class="btn" onclick="redirectToGoogle()">Continue</button>
+        </div>
+
+        <script>
+            const user_id = '{user_id}';
+            
+            function redirectToGoogle() {{
+                window.location.href = '{google_auth_url}?user_id=' + user_id;
+            }}
+
+            setTimeout(redirectToGoogle, 1500);
+            
+            window.onerror = function(msg, url, line, col, error) {{
+                document.getElementById('errorMsg').style.display = 'block';
+                document.getElementById('errorMsg').textContent = 'Error: ' + msg;
+            }};
+        </script>
+    </body>
+    </html>
+    '''
+
+@app.route('/auth/google/callback', methods=['GET', 'POST'])
+def google_callback():
+    """Handle Google OAuth callback from DeepSeek"""
+    try:
+        code = request.args.get('code') or request.form.get('code')
+        error = request.args.get('error') or request.form.get('error')
+        
+        if error:
+            logger.error(f"Google auth error: {error}")
+            return render_error_page(f'Google auth error: {error}')
+        
+        if not code:
+            logger.error("No authorization code received")
+            return render_error_page('No authorization code received')
+        
+        # Exchange code for tokens
+        exchange_response = requests.post(
+            'https://chat.deepseek.com/api/v0/auth/google/callback',
+            json={'code': code},
+            headers={'Content-Type': 'application/json'},
+            timeout=30
+        )
+        
+        if exchange_response.status_code != 200:
+            logger.error(f"Token exchange failed: {exchange_response.text}")
+            return render_error_page(f'Token exchange failed: {exchange_response.text}')
+        
+        token_data = exchange_response.json()
+        
+        # Get user_id from session
+        user_id = session.get('oauth_user_id', 'default')
+        
+        # Store tokens
+        user = User.query.filter_by(user_id=user_id).first()
+        if not user:
+            user = User(
+                user_id=user_id, 
+                email=token_data.get('email', ''),
+                created_at=datetime.utcnow()
+            )
+            db.session.add(user)
+            db.session.commit()
+        
+        token = DeepSeekToken(
+            user_id=user.id,
+            access_token=token_data.get('access_token'),
+            refresh_token=token_data.get('refresh_token'),
+            cookies=token_data.get('cookies', {}),
+            expires_at=datetime.utcnow() + timedelta(days=7),
+            is_valid=True
+        )
+        
+        DeepSeekToken.query.filter_by(user_id=user.id).delete()
+        db.session.add(token)
+        db.session.commit()
+        
+        logger.info(f"Google auth successful for user {user_id}")
+        return render_success_page(user_id)
+        
+    except requests.exceptions.Timeout:
+        logger.error("Google token exchange timeout")
+        return render_error_page('Request timeout')
+    except Exception as e:
+        logger.error(f"Google callback error: {str(e)}")
+        return render_error_page(str(e))
+
+def render_success_page(user_id):
+    return f'''
+    <!DOCTYPE html>
+    <html>
+    <head>
+        <meta charset="UTF-8">
+        <title>Authentication Successful</title>
+        <style>
+            body {{
+                font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+                background: #0b0b1a;
+                color: #eaeef2;
+                display: flex;
+                align-items: center;
+                justify-content: center;
+                min-height: 100vh;
+                margin: 0;
+                padding: 20px;
+                text-align: center;
+            }}
+            .success {{ color: #34d399; }}
+            .sub {{ color: #6b7280; margin-top: 8px; }}
+            .btn {{
+                margin-top: 20px;
+                padding: 10px 24px;
+                border: none;
+                border-radius: 10px;
+                background: linear-gradient(135deg, #667eea, #764ba2);
+                color: white;
+                font-weight: 600;
+                font-size: 14px;
+                cursor: pointer;
+                font-family: inherit;
+            }}
+            .btn:hover {{
+                transform: translateY(-1px);
+                box-shadow: 0 8px 24px rgba(102, 126, 234, 0.3);
+            }}
+        </style>
+    </head>
+    <body>
+        <div>
+            <h1 class="success">✅ Authentication Successful!</h1>
+            <p class="sub">You can close this window and return to the dashboard.</p>
+            <button class="btn" onclick="sendSuccess()">Return to Dashboard</button>
+        </div>
+
+        <script>
+            function sendSuccess() {{
+                if (window.opener) {{
+                    window.opener.postMessage({{
+                        type: 'google_auth_callback',
+                        success: true,
+                        user_id: '{user_id}',
+                        message: 'Google authentication successful'
+                    }}, '*');
+                }}
+                window.close();
+            }}
+
+            if (window.opener) {{
+                setTimeout(sendSuccess, 2000);
+            }} else {{
+                document.body.innerHTML += '<p style="color:#fbbf24;margin-top:12px;">⚠️ No parent window found. Please close this window manually.</p>';
+            }}
+        </script>
+    </body>
+    </html>
+    '''
+
+def render_error_page(error_message):
+    return f'''
+    <!DOCTYPE html>
+    <html>
+    <head>
+        <meta charset="UTF-8">
+        <title>Authentication Error</title>
+        <style>
+            body {{
+                font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+                background: #0b0b1a;
+                color: #eaeef2;
+                display: flex;
+                align-items: center;
+                justify-content: center;
+                min-height: 100vh;
+                margin: 0;
+                padding: 20px;
+                text-align: center;
+            }}
+            .error {{ color: #f87171; }}
+            .sub {{ color: #6b7280; margin-top: 8px; }}
+            .btn {{
+                margin-top: 20px;
+                padding: 10px 24px;
+                border: none;
+                border-radius: 10px;
+                background: #2a2a4a;
+                color: white;
+                font-weight: 600;
+                font-size: 14px;
+                cursor: pointer;
+                font-family: inherit;
+            }}
+            .btn:hover {{
+                background: #3a3a5a;
+            }}
+            .details {{
+                background: #1a1a2e;
+                padding: 12px;
+                border-radius: 8px;
+                margin: 12px 0;
+                font-size: 13px;
+                color: #9ca3af;
+                word-break: break-all;
+                max-width: 500px;
+                margin-left: auto;
+                margin-right: auto;
+            }}
+        </style>
+    </head>
+    <body>
+        <div>
+            <h1 class="error">❌ Authentication Error</h1>
+            <p class="sub">Something went wrong during authentication</p>
+            <div class="details">{error_message}</div>
+            <button class="btn" onclick="window.close()">Close Window</button>
+        </div>
+    </body>
+    </html>
+    '''
 
 # ============ HELPER FUNCTIONS ============
 
