@@ -18,5 +18,3 @@ services:
         databaseName: sep_x
         user: sep_x_user
     plan: free
-    runtime:
-      version: 3.11
