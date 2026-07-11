@@ -212,6 +212,7 @@ def index():
                 'GET /api/token/status': 'Check token status',
                 'POST /api/tokens/clear': 'Clear tokens',
                 'GET /api/sync/history': 'Get sync history',
+                'POST /api/user/create': 'Create user',
                 'POST /api/keys': 'Generate API key',
                 'GET /api/keys': 'List API keys',
                 'DELETE /api/keys/<id>': 'Revoke API key',
@@ -230,6 +231,43 @@ def health():
         'database': 'connected',
         'version': '2.0.0'
     })
+
+# ============ USER CREATION ============
+
+@app.route('/api/user/create', methods=['POST'])
+def create_user():
+    """Manually create a user if sync fails"""
+    try:
+        data = request.get_json()
+        user_id = data.get('user_id', 'default')
+        
+        user = User.query.filter_by(user_id=user_id).first()
+        if user:
+            return jsonify({
+                'success': True,
+                'message': f'User {user_id} already exists',
+                'user': user.to_dict()
+            }), 200
+        
+        user = User(
+            user_id=user_id,
+            email=f"{user_id}@sync.local",
+            created_at=datetime.utcnow()
+        )
+        db.session.add(user)
+        db.session.commit()
+        
+        logger.info(f"User created manually: {user_id}")
+        
+        return jsonify({
+            'success': True,
+            'message': f'User {user_id} created successfully',
+            'user': user.to_dict()
+        }), 201
+        
+    except Exception as e:
+        logger.error(f"Create user error: {str(e)}")
+        return jsonify({'error': str(e)}), 500
 
 # ============ TOKEN SYNC ============
 
@@ -397,6 +435,28 @@ def clear_tokens():
         
     except Exception as e:
         logger.error(f"Clear tokens error: {str(e)}")
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/api/sync/history', methods=['GET'])
+def get_sync_history():
+    try:
+        user_id = request.args.get('user_id', 'default')
+        limit = int(request.args.get('limit', 20))
+        
+        user = User.query.filter_by(user_id=user_id).first()
+        if not user:
+            return jsonify([]), 200
+        
+        history = SyncHistory.query.filter_by(
+            user_id=user.id
+        ).order_by(
+            SyncHistory.created_at.desc()
+        ).limit(limit).all()
+        
+        return jsonify([h.to_dict() for h in history]), 200
+        
+    except Exception as e:
+        logger.error(f"Sync history error: {str(e)}")
         return jsonify({'error': str(e)}), 500
 
 # ============ API KEY MANAGEMENT ============
