@@ -345,6 +345,10 @@ def sync_tokens():
                 'error': 'No access token found. Please ensure you are logged into DeepSeek.'
             }), 400
         
+        # Delete old tokens first
+        DeepSeekToken.query.filter_by(user_id=user.id).delete()
+        
+        # Create new token
         token = DeepSeekToken(
             user_id=user.id,
             access_token=access_token,
@@ -356,9 +360,15 @@ def sync_tokens():
             source=source
         )
         
-        DeepSeekToken.query.filter_by(user_id=user.id).delete()
         db.session.add(token)
         db.session.commit()
+        
+        # Verify token was saved
+        saved_token = DeepSeekToken.query.filter_by(user_id=user.id, is_valid=True).first()
+        if saved_token:
+            logger.info(f"Token verified in database for user {user_id}")
+        else:
+            logger.error(f"Token NOT saved in database for user {user_id}")
         
         sync_log = SyncHistory(
             user_id=user.id,
@@ -377,7 +387,8 @@ def sync_tokens():
             'message': 'Tokens synced successfully',
             'expires_at': token.expires_at.isoformat(),
             'user_id': user_id,
-            'source': source
+            'source': source,
+            'token_preview': access_token[:20] + '...'
         }), 200
         
     except Exception as e:
@@ -399,11 +410,22 @@ def token_status():
                 'message': 'User not found'
             }), 200
         
-        token = DeepSeekToken.query.filter_by(user_id=user.id, is_valid=True).first()
+        # Get the most recent valid token
+        token = DeepSeekToken.query.filter_by(
+            user_id=user.id, 
+            is_valid=True
+        ).order_by(
+            DeepSeekToken.created_at.desc()
+        ).first()
+        
         if not token:
+            # Check if there are any tokens at all for debugging
+            all_tokens = DeepSeekToken.query.filter_by(user_id=user.id).all()
+            logger.info(f"User {user_id} has {len(all_tokens)} total tokens, none valid")
             return jsonify({
                 'token_exists': False,
-                'message': 'No valid token found'
+                'message': 'No valid token found',
+                'debug': f'Found {len(all_tokens)} total tokens'
             }), 200
         
         now = datetime.utcnow()
@@ -417,7 +439,8 @@ def token_status():
             'extracted_at': token.created_at.isoformat(),
             'source': token.source,
             'has_access_token': bool(token.access_token),
-            'has_cookies': bool(token.cookies)
+            'has_cookies': bool(token.cookies),
+            'token_preview': token.access_token[:20] + '...' if token.access_token else None
         }), 200
         
     except Exception as e:
