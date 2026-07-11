@@ -877,7 +877,7 @@
                             </div>
                             <div class="status-item">
                                 <div class="label">User ID</div>
-                                <div class="value" id="tokenUser" style="color:var(--ash-dark);font-size:13px;font-family:var(--font-cyber);">default</div>
+                                <div class="value" id="tokenUser" style="color:var(--ash-dark);font-size:13px;font-family:var(--font-cyber);">admin</div>
                             </div>
                         </div>
                     </div>
@@ -963,9 +963,9 @@
 
     <script>
         // ============================================================
-        // CONFIGURATION
+        // CONFIGURATION - MATCHES EXTENSION USER ID
         // ============================================================
-        const USER_ID = 'default';
+        const USER_ID = 'admin';  // Changed from 'default' to match extension
         let tokenValid = false;
 
         const $ = id => document.getElementById(id);
@@ -1023,7 +1023,7 @@
         });
 
         // ============================================================
-        // STATUS (FIXED)
+        // STATUS
         // ============================================================
         async function checkStatus() {
             statusDot.className = 'dot checking';
