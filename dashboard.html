@@ -1007,20 +1007,23 @@
             // Ensure user exists before checking status
             await ensureUser();
             
-            checkStatus();
-            loadAPIKeys();
-            loadLogs();
+            // Initial status check
+            await checkStatus();
+            await loadAPIKeys();
+            await loadLogs();
 
-            setInterval(() => {
+            // Auto-refresh every 10 seconds to catch token updates
+            setInterval(async () => {
                 if (document.visibilityState === 'visible') {
-                    loadAPIKeys();
-                    loadLogs();
+                    await checkStatus();
+                    await loadAPIKeys();
+                    await loadLogs();
                 }
-            }, 30000);
+            }, 10000);
         });
 
         // ============================================================
-        // STATUS
+        // STATUS (FIXED)
         // ============================================================
         async function checkStatus() {
             statusDot.className = 'dot checking';
@@ -1041,10 +1044,10 @@
                     const days = data.expires_in_days || 0;
                     if (days > 2) {
                         tokenExpiry.textContent = Math.ceil(days) + ' DAYS';
-                        tokenExpiry.style.color = 'var(--chartreuse)';
+                        tokenExpiry.style.color = '#34d399';
                     } else if (days > 0) {
                         tokenExpiry.textContent = Math.ceil(days) + ' DAYS ⚠️';
-                        tokenExpiry.style.color = '#ffaa00';
+                        tokenExpiry.style.color = '#fbbf24';
                     } else {
                         tokenExpiry.textContent = 'EXPIRED';
                         tokenExpiry.style.color = '#ff4444';
@@ -1056,7 +1059,7 @@
                     tokenStatus.textContent = '⛔ NO TOKEN';
                     tokenStatus.className = 'value invalid';
                     tokenExpiry.textContent = '—';
-                    tokenExpiry.style.color = 'var(--ash-dark)';
+                    tokenExpiry.style.color = '#6b7280';
                 }
             } catch (err) {
                 console.error('❌ Status check error:', err);
@@ -1079,7 +1082,7 @@
                     body: JSON.stringify({ user_id: USER_ID })
                 });
                 if (res.ok) {
-                    checkStatus();
+                    await checkStatus();
                     showStatus('TOKENS CLEARED', 'success');
                 }
             } catch (error) {
@@ -1114,7 +1117,7 @@
 
                 if (res.ok && data.success) {
                     showStatus('✅ KEY GENERATED: ' + data.key_full, 'success');
-                    loadAPIKeys();
+                    await loadAPIKeys();
                 } else {
                     showStatus('❌ ' + (data.error || 'Generation failed'), 'error');
                 }
@@ -1186,7 +1189,7 @@
                 const data = await res.json();
                 if (data.success) {
                     showStatus('✅ KEY REVOKED', 'success');
-                    loadAPIKeys();
+                    await loadAPIKeys();
                 }
             } catch (err) {
                 showStatus('❌ ' + err.message, 'error');
@@ -1200,7 +1203,7 @@
                 const data = await res.json();
                 if (data.success) {
                     showStatus('✅ NEW KEY: ' + data.new_key, 'success');
-                    loadAPIKeys();
+                    await loadAPIKeys();
                 }
             } catch (err) {
                 showStatus('❌ ' + err.message, 'error');
