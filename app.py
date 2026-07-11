@@ -231,7 +231,7 @@ def health():
         'version': '2.0.0'
     })
 
-# ============ TOKEN SYNC (Chrome Extension) ============
+# ============ TOKEN SYNC ============
 
 @app.route('/api/tokens/sync', methods=['POST'])
 def sync_tokens():
@@ -245,9 +245,7 @@ def sync_tokens():
         
         logger.info(f"Token sync request from {source} for user {user_id}")
         logger.info(f"Token data keys: {list(token_data.keys())}")
-        logger.info(f"Cookies type: {type(cookies)}")
         
-        # Get or create user
         user = User.query.filter_by(user_id=user_id).first()
         if not user:
             user = User(
@@ -259,64 +257,37 @@ def sync_tokens():
             db.session.commit()
             logger.info(f"Created new user: {user_id}")
         
-        # Extract access token from multiple sources
         access_token = None
         
-        # Method 1: Check token_data
         if token_data.get('access_token'):
             access_token = token_data.get('access_token')
             logger.info("Found token in token_data")
         
-        # Method 2: Check cookies for ds_session_id
         if not access_token and cookies:
             if isinstance(cookies, dict):
-                # Direct cookie dict
-                for cookie_name in ['ds_session_id', 'access_token', 'token', 'auth_token', 'session', 'sid', 'user_token']:
+                for cookie_name in ['ds_session_id', 'access_token', 'token', 'auth_token', 'session', 'sid']:
                     if cookie_name in cookies:
                         access_token = cookies[cookie_name]
                         logger.info(f"Found token in cookie dict: {cookie_name}")
                         break
             elif isinstance(cookies, list):
-                # Cookies as list of objects
                 for cookie in cookies:
                     if isinstance(cookie, dict):
                         cookie_name = cookie.get('name', '')
-                        if cookie_name in ['ds_session_id', 'access_token', 'token', 'auth_token', 'session', 'sid', 'user_token']:
+                        if cookie_name in ['ds_session_id', 'access_token', 'token', 'auth_token', 'session', 'sid']:
                             access_token = cookie.get('value')
                             logger.info(f"Found token in cookie list: {cookie_name}")
                             break
-                    elif hasattr(cookie, 'name') and hasattr(cookie, 'value'):
-                        # Cookie object
-                        if cookie.name in ['ds_session_id', 'access_token', 'token', 'auth_token', 'session', 'sid', 'user_token']:
-                            access_token = cookie.value
-                            logger.info(f"Found token in cookie object: {cookie.name}")
-                            break
-        
-        # Method 3: Check localStorage
-        if not access_token and token_data.get('localStorage'):
-            local_data = token_data.get('localStorage', {})
-            if isinstance(local_data, dict):
-                for key in ['access_token', 'token', 'auth_token', 'ds_session_id']:
-                    if key in local_data:
-                        access_token = local_data[key]
-                        logger.info(f"Found token in localStorage: {key}")
-                        break
-        
-        # Method 4: If we have a session_id but no token, use it
-        if not access_token and token_data.get('session_token'):
-            access_token = token_data.get('session_token')
-            logger.info("Found token in session_token field")
         
         if not access_token:
             logger.warning(f"No access token found for user {user_id}")
             
-            # Log sync failure
             sync_log = SyncHistory(
                 user_id=user.id,
                 sync_type='manual',
                 source=source,
                 status='failed',
-                error_message='No access token found in any source',
+                error_message='No access token found',
                 token_count=0
             )
             db.session.add(sync_log)
@@ -324,10 +295,9 @@ def sync_tokens():
             
             return jsonify({
                 'success': False,
-                'error': 'No access token found. Please ensure you are logged into DeepSeek and refresh the page.'
+                'error': 'No access token found. Please ensure you are logged into DeepSeek.'
             }), 400
         
-        # Store token
         token = DeepSeekToken(
             user_id=user.id,
             access_token=access_token,
@@ -339,12 +309,10 @@ def sync_tokens():
             source=source
         )
         
-        # Delete old tokens
         DeepSeekToken.query.filter_by(user_id=user.id).delete()
         db.session.add(token)
         db.session.commit()
         
-        # Log successful sync
         sync_log = SyncHistory(
             user_id=user.id,
             sync_type='manual',
@@ -362,8 +330,7 @@ def sync_tokens():
             'message': 'Tokens synced successfully',
             'expires_at': token.expires_at.isoformat(),
             'user_id': user_id,
-            'source': source,
-            'token_preview': access_token[:20] + '...'
+            'source': source
         }), 200
         
     except Exception as e:
@@ -375,7 +342,6 @@ def sync_tokens():
 
 @app.route('/api/token/status', methods=['GET'])
 def token_status():
-    """Check token status for a user"""
     try:
         user_id = request.args.get('user_id', 'default')
         user = User.query.filter_by(user_id=user_id).first()
@@ -413,7 +379,6 @@ def token_status():
 
 @app.route('/api/tokens/clear', methods=['POST'])
 def clear_tokens():
-    """Clear tokens for a user"""
     try:
         data = request.get_json()
         user_id = data.get('user_id', 'default') if data else 'default'
@@ -432,29 +397,6 @@ def clear_tokens():
         
     except Exception as e:
         logger.error(f"Clear tokens error: {str(e)}")
-        return jsonify({'error': str(e)}), 500
-
-@app.route('/api/sync/history', methods=['GET'])
-def get_sync_history():
-    """Get token sync history for a user"""
-    try:
-        user_id = request.args.get('user_id', 'default')
-        limit = int(request.args.get('limit', 20))
-        
-        user = User.query.filter_by(user_id=user_id).first()
-        if not user:
-            return jsonify([]), 200
-        
-        history = SyncHistory.query.filter_by(
-            user_id=user.id
-        ).order_by(
-            SyncHistory.created_at.desc()
-        ).limit(limit).all()
-        
-        return jsonify([h.to_dict() for h in history]), 200
-        
-    except Exception as e:
-        logger.error(f"Sync history error: {str(e)}")
         return jsonify({'error': str(e)}), 500
 
 # ============ API KEY MANAGEMENT ============
@@ -655,15 +597,11 @@ def get_logs():
 # ============ HELPER FUNCTIONS ============
 
 def extract_csrf(html):
-    """Extract CSRF token from HTML using html.parser"""
     if not html:
         return None
     
-    # Try BeautifulSoup first
     try:
         soup = BeautifulSoup(html, 'html.parser')
-        
-        # Check meta tags
         meta = soup.find('meta', {'name': 'csrf-token'})
         if meta and meta.get('content'):
             return meta.get('content')
@@ -674,7 +612,6 @@ def extract_csrf(html):
     except Exception as e:
         logger.warning(f"BeautifulSoup parsing error: {e}")
     
-    # Fallback: regex patterns
     patterns = [
         r'csrf_token["\']?\s*[:=]\s*["\']([^"\']+)["\']',
         r'X-CSRF-Token["\']?\s*[:=]\s*["\']([^"\']+)["\']',
