@@ -9,9 +9,6 @@
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.0/css/all.min.css" />
 
     <style>
-        /* ====================================================
-                   CYBERPUNK RESET & BASE
-                ==================================================== */
         * {
             margin: 0;
             padding: 0;
@@ -49,7 +46,6 @@
             overflow-x: hidden;
         }
 
-        /* Cyberpunk Grid Overlay */
         body::before {
             content: '';
             position: fixed;
@@ -61,7 +57,6 @@
             z-index: 0;
         }
 
-        /* Scanline Effect */
         body::after {
             content: '';
             position: fixed;
@@ -84,9 +79,6 @@
             max-width: 1360px;
         }
 
-        /* ====================================================
-                   CYBERPUNK GLASS PANEL
-                ==================================================== */
         .glass {
             background: rgba(26, 26, 26, 0.85);
             backdrop-filter: blur(20px);
@@ -100,7 +92,6 @@
             position: relative;
         }
 
-        /* Neon Border Glow */
         .glass::before {
             content: '';
             position: absolute;
@@ -120,7 +111,6 @@
             pointer-events: none;
         }
 
-        /* Corner Accents */
         .glass::after {
             content: '◆ ◆ ◆';
             position: absolute;
@@ -134,9 +124,6 @@
             pointer-events: none;
         }
 
-        /* ====================================================
-                   HEADER
-                ==================================================== */
         .header {
             display: flex;
             align-items: center;
@@ -218,9 +205,6 @@
             flex-wrap: wrap;
         }
 
-        /* ====================================================
-                   STATUS PILL
-                ==================================================== */
         .status-pill {
             display: flex;
             align-items: center;
@@ -286,9 +270,6 @@
             box-shadow: 0 0 20px rgba(212, 255, 0, 0.05);
         }
 
-        /* ====================================================
-                   MAIN GRID
-                ==================================================== */
         .main-grid {
             display: grid;
             grid-template-columns: 1fr 2fr;
@@ -303,9 +284,6 @@
             }
         }
 
-        /* ====================================================
-                   CYBERPUNK CARD
-                ==================================================== */
         .cyber-card {
             background: rgba(26, 26, 26, 0.6);
             border-radius: 16px;
@@ -342,9 +320,6 @@
             opacity: 0.5;
         }
 
-        /* ====================================================
-                   AUTH CARD - CONNECTION STATUS
-                ==================================================== */
         .connection-status-box {
             margin-top: 4px;
             padding: 16px;
@@ -393,9 +368,6 @@
             color: #ffaa00;
         }
 
-        /* ====================================================
-                   QUICK ACTIONS
-                ==================================================== */
         .quick-actions {
             display: flex;
             gap: 8px;
@@ -436,9 +408,6 @@
             background: rgba(255, 68, 68, 0.04);
         }
 
-        /* ====================================================
-                   MSG
-                ==================================================== */
         .msg {
             padding: 12px 16px;
             border-radius: 10px;
@@ -470,9 +439,6 @@
             color: #ffaa00;
         }
 
-        /* ====================================================
-                   API KEYS
-                ==================================================== */
         .key-gen-form {
             display: flex;
             flex-wrap: wrap;
@@ -534,9 +500,6 @@
             transform: translateY(0);
         }
 
-        /* ====================================================
-                   TABLE
-                ==================================================== */
         .table-wrap {
             overflow-x: auto;
             border-radius: 12px;
@@ -653,9 +616,6 @@
             color: var(--chartreuse);
         }
 
-        /* ====================================================
-                   LOGS
-                ==================================================== */
         .logs-section {
             padding: 0 32px 32px;
         }
@@ -743,9 +703,6 @@
             letter-spacing: 0.5px;
         }
 
-        /* ====================================================
-                   SCROLLBAR
-                ==================================================== */
         .log-list::-webkit-scrollbar {
             width: 4px;
         }
@@ -761,9 +718,37 @@
             background: rgba(212, 255, 0, 0.25);
         }
 
-        /* ====================================================
-                   RESPONSIVE
-                ==================================================== */
+        .cyber-footer {
+            padding: 12px 32px;
+            border-top: 1px solid rgba(212, 255, 0, 0.04);
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            font-size: 10px;
+            color: var(--ash-dark);
+            font-family: var(--font-cyber);
+            letter-spacing: 0.5px;
+        }
+
+        .cyber-footer .version {
+            color: var(--chartreuse);
+            opacity: 0.5;
+        }
+
+        .cyber-footer .status-text {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+
+        .cyber-footer .status-text .live-dot {
+            width: 4px;
+            height: 4px;
+            border-radius: 50%;
+            background: var(--chartreuse);
+            animation: pulse-dot 2s infinite;
+        }
+
         @media (max-width: 640px) {
             .header {
                 padding: 16px 20px;
@@ -817,9 +802,6 @@
             }
         }
 
-        /* ====================================================
-                   ANIMATIONS
-                ==================================================== */
         @keyframes glitch {
             0% {
                 transform: translate(0);
@@ -845,88 +827,16 @@
             animation: glitch 0.3s infinite;
         }
 
-        /* Chartreuse highlight on hover for table rows */
         .cyber-table tbody tr:hover {
             background: rgba(212, 255, 0, 0.02);
         }
-
-        /* Footer / Version */
-        .cyber-footer {
-            padding: 12px 32px;
-            border-top: 1px solid rgba(212, 255, 0, 0.04);
-            display: flex;
-            justify-content: space-between;
-            align-items: center;
-            font-size: 10px;
-            color: var(--ash-dark);
-            font-family: var(--font-cyber);
-            letter-spacing: 0.5px;
-        }
-
-        .cyber-footer .version {
-            color: var(--chartreuse);
-            opacity: 0.5;
-        }
-
-        .cyber-footer .status-text {
-            display: flex;
-            align-items: center;
-            gap: 8px;
-        }
-
-        .cyber-footer .status-text .live-dot {
-            width: 4px;
-            height: 4px;
-            border-radius: 50%;
-            background: var(--chartreuse);
-            animation: pulse-dot 2s infinite;
-        }
     </style>
-
-     <script>
-        // Simple fetch with error handling
-        async function loadAPIKeys() {
-            try {
-                const response = await fetch('/api/keys?user_id=default');
-                if (!response.ok) throw new Error('Failed to fetch keys');
-                const data = await response.json();
-                console.log('API Keys:', data);
-            } catch (error) {
-                console.error('Load API keys error:', error);
-            }
-        }
-
-        async function loadLogs() {
-            try {
-                const response = await fetch('/api/logs?user_id=default&limit=20');
-                if (!response.ok) throw new Error('Failed to fetch logs');
-                const data = await response.json();
-                console.log('Logs:', data);
-            } catch (error) {
-                console.error('Load logs error:', error);
-            }
-        }
-
-        document.addEventListener('DOMContentLoaded', () => {
-            loadAPIKeys();
-            loadLogs();
-            setInterval(() => {
-                loadAPIKeys();
-                loadLogs();
-            }, 30000);
-        });
-    </script>
 </head>
 <body>
 
     <div class="app">
-
-        <!-- ====================================================
-        CYBERPUNK GLASS CONTAINER
-        ==================================================== -->
         <div class="glass">
 
-            <!-- ========== HEADER ========== -->
             <header class="header">
                 <div class="logo-area">
                     <div class="logo-icon">⚡</div>
@@ -946,10 +856,8 @@
                 </div>
             </header>
 
-            <!-- ========== MAIN GRID ========== -->
             <div class="main-grid">
 
-                <!-- ===== LEFT: CONNECTION ===== -->
                 <div class="cyber-card">
                     <div class="card-title">
                         <i class="fas fa-plug" style="color:var(--chartreuse);opacity:0.6;margin-right:8px;"></i>
@@ -986,7 +894,6 @@
                     <div id="statusMsg" class="msg"></div>
                 </div>
 
-                <!-- ===== RIGHT: API KEYS ===== -->
                 <div class="cyber-card">
                     <div class="card-title">
                         <i class="fas fa-key" style="color:var(--chartreuse);opacity:0.6;margin-right:8px;"></i>
@@ -994,7 +901,6 @@
                     </div>
                     <div class="card-sub"><i class="fas fa-cube"></i> Generate keys for your applications</div>
 
-                    <!-- Generate Key Form -->
                     <div class="key-gen-form">
                         <input type="text" id="keyNameInput" placeholder="KEY NAME" value="MY_KEY" />
                         <input type="number" id="rateLimitInput" placeholder="RATE /H" value="30" style="max-width:110px;" />
@@ -1004,7 +910,6 @@
                         </button>
                     </div>
 
-                    <!-- API Keys Table -->
                     <div class="table-wrap">
                         <table class="cyber-table">
                             <thead>
@@ -1032,7 +937,6 @@
                 </div>
             </div>
 
-            <!-- ========== LOGS ========== -->
             <div class="logs-section">
                 <div class="log-header">
                     <h3><i class="fas fa-history" style="margin-right:8px;color:var(--chartreuse);opacity:0.3;"></i>Activity Logs</h3>
@@ -1046,7 +950,6 @@
                 </div>
             </div>
 
-            <!-- ========== FOOTER ========== -->
             <div class="cyber-footer">
                 <span class="version">v2.0.0 // CYBERPUNK EDITION</span>
                 <span class="status-text">
@@ -1058,10 +961,10 @@
         </div>
     </div>
 
-    <!-- ============================================================
-    JAVASCRIPT
-    ============================================================ -->
     <script>
+        // ============================================================
+        // CONFIGURATION
+        // ============================================================
         const USER_ID = 'default';
         let tokenValid = false;
 
@@ -1076,7 +979,9 @@
         const logList = $('logList');
         const logCount = $('logCount');
 
-        // ======================== INIT ========================
+        // ============================================================
+        // INIT
+        // ============================================================
         document.addEventListener('DOMContentLoaded', () => {
             tokenUser.textContent = USER_ID.toUpperCase();
             checkStatus();
@@ -1091,8 +996,9 @@
             }, 30000);
         });
 
-        // ======================== STATUS ========================
-
+        // ============================================================
+        // STATUS
+        // ============================================================
         async function checkStatus() {
             statusDot.className = 'dot checking';
             statusLabel.textContent = 'SYNCING...';
@@ -1100,6 +1006,7 @@
             try {
                 const res = await fetch(`/api/token/status?user_id=${USER_ID}`);
                 const data = await res.json();
+                console.log('📊 Token status:', data);
 
                 if (data.token_exists && data.is_valid) {
                     tokenValid = true;
@@ -1129,6 +1036,7 @@
                     tokenExpiry.style.color = 'var(--ash-dark)';
                 }
             } catch (err) {
+                console.error('❌ Status check error:', err);
                 statusDot.className = 'dot offline';
                 statusLabel.textContent = 'ERROR';
                 tokenStatus.textContent = '⚠️ ERROR';
@@ -1136,8 +1044,9 @@
             }
         }
 
-        // ======================== CLEAR TOKENS ========================
-
+        // ============================================================
+        // CLEAR TOKENS
+        // ============================================================
         async function clearTokens() {
             if (!confirm('⚠️ CLEAR ALL TOKENS? This will disconnect your API.')) return;
             try {
@@ -1155,8 +1064,9 @@
             }
         }
 
-        // ======================== API KEY MANAGEMENT ========================
-
+        // ============================================================
+        // API KEY MANAGEMENT
+        // ============================================================
         async function createAPIKey() {
             const name = $('keyNameInput').value.trim() || 'MY_KEY';
             const rate_limit = parseInt($('rateLimitInput').value) || 30;
@@ -1168,22 +1078,25 @@
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({
                         user_id: USER_ID,
-                        name,
+                        name: name,
                         description: 'Generated via Cyberpunk Dashboard',
-                        rate_limit,
-                        expires_days
+                        rate_limit: rate_limit,
+                        expires_days: expires_days
                     })
                 });
 
+                console.log('📊 Create key response status:', res.status);
                 const data = await res.json();
+                console.log('📊 Create key response:', data);
 
-                if (data.success) {
+                if (res.ok && data.success) {
                     showStatus('✅ KEY GENERATED: ' + data.key_full, 'success');
                     loadAPIKeys();
                 } else {
                     showStatus('❌ ' + (data.error || 'Generation failed'), 'error');
                 }
             } catch (err) {
+                console.error('❌ Create key error:', err);
                 showStatus('❌ ' + err.message, 'error');
             }
         }
@@ -1192,6 +1105,7 @@
             try {
                 const res = await fetch(`/api/keys?user_id=${USER_ID}`);
                 const keys = await res.json();
+                console.log('📊 API Keys:', keys);
 
                 if (keys.length === 0) {
                     apiKeysBody.innerHTML = `
@@ -1238,7 +1152,7 @@
                         `).join('');
 
             } catch (err) {
-                console.error('Load API keys error:', err);
+                console.error('❌ Load API keys error:', err);
             }
         }
 
@@ -1279,12 +1193,14 @@
             }, 3000);
         }
 
-        // ======================== LOGS ========================
-
+        // ============================================================
+        // LOGS
+        // ============================================================
         async function loadLogs() {
             try {
                 const res = await fetch(`/api/logs?user_id=${USER_ID}&limit=20`);
                 const logs = await res.json();
+                console.log('📊 Logs:', logs);
 
                 logCount.textContent = logs.length + ' REQUESTS';
 
@@ -1310,12 +1226,13 @@
                         `).join('');
 
             } catch (err) {
-                console.error('Load logs error:', err);
+                console.error('❌ Load logs error:', err);
             }
         }
 
-        // ======================== HELPERS ========================
-
+        // ============================================================
+        // HELPERS
+        // ============================================================
         function showStatus(text, type) {
             const el = $('statusMsg');
             if (!el) return;
