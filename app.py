@@ -46,6 +46,15 @@ class User(db.Model):
     tokens = db.relationship('DeepSeekToken', backref='user', lazy=True, cascade='all, delete-orphan')
     api_keys = db.relationship('APIKey', backref='user', lazy=True, cascade='all, delete-orphan')
     sync_history = db.relationship('SyncHistory', backref='user', lazy=True, cascade='all, delete-orphan')
+    
+    def to_dict(self):
+        return {
+            'id': self.id,
+            'user_id': self.user_id,
+            'email': self.email,
+            'created_at': self.created_at.isoformat() if self.created_at else None,
+            'is_active': self.is_active
+        }
 
 class DeepSeekToken(db.Model):
     __tablename__ = 'deepseek_tokens'
