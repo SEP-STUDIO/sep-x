@@ -980,10 +980,33 @@
         const logCount = $('logCount');
 
         // ============================================================
+        // ENSURE USER EXISTS
+        // ============================================================
+        async function ensureUser() {
+            try {
+                const res = await fetch('/api/user/create', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ user_id: USER_ID })
+                });
+                const data = await res.json();
+                console.log('📊 User creation:', data);
+                return data.success;
+            } catch (error) {
+                console.error('❌ User creation error:', error);
+                return false;
+            }
+        }
+
+        // ============================================================
         // INIT
         // ============================================================
-        document.addEventListener('DOMContentLoaded', () => {
+        document.addEventListener('DOMContentLoaded', async () => {
             tokenUser.textContent = USER_ID.toUpperCase();
+            
+            // Ensure user exists before checking status
+            await ensureUser();
+            
             checkStatus();
             loadAPIKeys();
             loadLogs();
