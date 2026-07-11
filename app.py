@@ -242,11 +242,8 @@ def sync_tokens():
         token_data = data.get('tokens', {})
         cookies = data.get('cookies', {})
         source = data.get('source', 'unknown')
-        extension_version = data.get('extension_version', '1.0.0')
         
         logger.info(f"Token sync request from {source} for user {user_id}")
-        logger.info(f"Token data keys: {list(token_data.keys())}")
-        logger.info(f"Cookies count: {len(cookies) if cookies else 0}")
         
         # Get or create user
         user = User.query.filter_by(user_id=user_id).first()
@@ -260,15 +257,15 @@ def sync_tokens():
             db.session.commit()
             logger.info(f"Created new user: {user_id}")
         
-        # Extract access token from multiple sources
+        # Extract access token
         access_token = None
         
-        # Method 1: Check token_data directly
+        # Check token_data first
         if token_data.get('access_token'):
             access_token = token_data.get('access_token')
             logger.info("Found token in token_data")
         
-        # Method 2: Check cookies
+        # Check cookies
         if not access_token and cookies:
             for cookie_name in ['access_token', 'token', 'auth_token', 'session', 'sid']:
                 if cookie_name in cookies:
@@ -276,44 +273,25 @@ def sync_tokens():
                     logger.info(f"Found token in cookie: {cookie_name}")
                     break
         
-        # Method 3: Check localStorage
+        # Check localStorage
         if not access_token and token_data.get('localStorage'):
             local_data = token_data.get('localStorage', {})
-            known = local_data.get('known', {})
-            if known.get('access_token'):
-                access_token = known.get('access_token')
-                logger.info("Found token in localStorage known")
-            elif known.get('token'):
-                access_token = known.get('token')
-                logger.info("Found token in localStorage known (as token)")
-            else:
-                # Check all localStorage
-                all_data = local_data.get('all', {})
+            if isinstance(local_data, dict):
                 for key in ['access_token', 'token', 'auth_token']:
-                    if key in all_data:
-                        access_token = all_data[key]
-                        logger.info(f"Found token in localStorage all: {key}")
-                        break
-        
-        # Method 4: Check if any cookie looks like a token
-        if not access_token and cookies:
-            for cookie_name, cookie_value in cookies.items():
-                if any(keyword in cookie_name.lower() for keyword in ['token', 'auth', 'session']):
-                    if len(cookie_value) > 20:  # Tokens are usually long
-                        access_token = cookie_value
-                        logger.info(f"Found potential token in cookie: {cookie_name}")
+                    if key in local_data:
+                        access_token = local_data[key]
+                        logger.info(f"Found token in localStorage: {key}")
                         break
         
         if not access_token:
             logger.warning(f"No access token found for user {user_id}")
             
-            # Log sync failure
             sync_log = SyncHistory(
                 user_id=user.id,
                 sync_type='auto',
                 source=source,
                 status='failed',
-                error_message='No access token found in cookies or localStorage',
+                error_message='No access token found',
                 token_count=0
             )
             db.session.add(sync_log)
@@ -321,7 +299,7 @@ def sync_tokens():
             
             return jsonify({
                 'success': False,
-                'error': 'No access token found. Please ensure you are logged into DeepSeek and refresh the page.'
+                'error': 'No access token found. Please ensure you are logged into DeepSeek.'
             }), 400
         
         # Store token
@@ -341,7 +319,6 @@ def sync_tokens():
         db.session.add(token)
         db.session.commit()
         
-        # Log successful sync
         sync_log = SyncHistory(
             user_id=user.id,
             sync_type='auto',
