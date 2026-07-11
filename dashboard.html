@@ -882,6 +882,40 @@
             animation: pulse-dot 2s infinite;
         }
     </style>
+
+     <script>
+        // Simple fetch with error handling
+        async function loadAPIKeys() {
+            try {
+                const response = await fetch('/api/keys?user_id=default');
+                if (!response.ok) throw new Error('Failed to fetch keys');
+                const data = await response.json();
+                console.log('API Keys:', data);
+            } catch (error) {
+                console.error('Load API keys error:', error);
+            }
+        }
+
+        async function loadLogs() {
+            try {
+                const response = await fetch('/api/logs?user_id=default&limit=20');
+                if (!response.ok) throw new Error('Failed to fetch logs');
+                const data = await response.json();
+                console.log('Logs:', data);
+            } catch (error) {
+                console.error('Load logs error:', error);
+            }
+        }
+
+        document.addEventListener('DOMContentLoaded', () => {
+            loadAPIKeys();
+            loadLogs();
+            setInterval(() => {
+                loadAPIKeys();
+                loadLogs();
+            }, 30000);
+        });
+    </script>
 </head>
 <body>
 
