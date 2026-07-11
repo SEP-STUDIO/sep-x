@@ -139,9 +139,9 @@ class SyncHistory(db.Model):
     id = db.Column(db.Integer, primary_key=True)
     user_id = db.Column(db.Integer, db.ForeignKey('users.id'), nullable=False)
     
-    sync_type = db.Column(db.String(50))  # 'auto', 'manual', 'extension'
-    source = db.Column(db.String(100))    # 'chrome_extension', 'api'
-    status = db.Column(db.String(20))     # 'success', 'failed'
+    sync_type = db.Column(db.String(50))
+    source = db.Column(db.String(100))
+    status = db.Column(db.String(20))
     error_message = db.Column(db.Text)
     token_count = db.Column(db.Integer, default=0)
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
@@ -178,7 +178,6 @@ def require_api_key(f):
         if key.expires_at and key.expires_at < datetime.utcnow():
             return jsonify({'error': 'API key expired'}), 401
         
-        # Rate limiting
         if key.last_reset.date() < datetime.utcnow().date():
             key.requests_count = 0
             key.last_reset = datetime.utcnow()
@@ -246,6 +245,8 @@ def sync_tokens():
         extension_version = data.get('extension_version', '1.0.0')
         
         logger.info(f"Token sync request from {source} for user {user_id}")
+        logger.info(f"Token data keys: {list(token_data.keys())}")
+        logger.info(f"Cookies count: {len(cookies) if cookies else 0}")
         
         # Get or create user
         user = User.query.filter_by(user_id=user_id).first()
@@ -259,35 +260,69 @@ def sync_tokens():
             db.session.commit()
             logger.info(f"Created new user: {user_id}")
         
-        # Extract access token
-        access_token = token_data.get('access_token')
+        # Extract access token from multiple sources
+        access_token = None
         
-        if not access_token:
-            # Try to get from cookies
-            for cookie_name in ['access_token', 'token', 'auth_token', 'session']:
+        # Method 1: Check token_data directly
+        if token_data.get('access_token'):
+            access_token = token_data.get('access_token')
+            logger.info("Found token in token_data")
+        
+        # Method 2: Check cookies
+        if not access_token and cookies:
+            for cookie_name in ['access_token', 'token', 'auth_token', 'session', 'sid']:
                 if cookie_name in cookies:
                     access_token = cookies[cookie_name]
+                    logger.info(f"Found token in cookie: {cookie_name}")
                     break
+        
+        # Method 3: Check localStorage
+        if not access_token and token_data.get('localStorage'):
+            local_data = token_data.get('localStorage', {})
+            known = local_data.get('known', {})
+            if known.get('access_token'):
+                access_token = known.get('access_token')
+                logger.info("Found token in localStorage known")
+            elif known.get('token'):
+                access_token = known.get('token')
+                logger.info("Found token in localStorage known (as token)")
+            else:
+                # Check all localStorage
+                all_data = local_data.get('all', {})
+                for key in ['access_token', 'token', 'auth_token']:
+                    if key in all_data:
+                        access_token = all_data[key]
+                        logger.info(f"Found token in localStorage all: {key}")
+                        break
+        
+        # Method 4: Check if any cookie looks like a token
+        if not access_token and cookies:
+            for cookie_name, cookie_value in cookies.items():
+                if any(keyword in cookie_name.lower() for keyword in ['token', 'auth', 'session']):
+                    if len(cookie_value) > 20:  # Tokens are usually long
+                        access_token = cookie_value
+                        logger.info(f"Found potential token in cookie: {cookie_name}")
+                        break
+        
+        if not access_token:
+            logger.warning(f"No access token found for user {user_id}")
             
-            if not access_token:
-                logger.warning(f"No access token found for user {user_id}")
-                
-                # Log sync failure
-                sync_log = SyncHistory(
-                    user_id=user.id,
-                    sync_type='auto',
-                    source=source,
-                    status='failed',
-                    error_message='No access token found',
-                    token_count=0
-                )
-                db.session.add(sync_log)
-                db.session.commit()
-                
-                return jsonify({
-                    'success': False,
-                    'error': 'No access token found. Please ensure you are logged into DeepSeek.'
-                }), 400
+            # Log sync failure
+            sync_log = SyncHistory(
+                user_id=user.id,
+                sync_type='auto',
+                source=source,
+                status='failed',
+                error_message='No access token found in cookies or localStorage',
+                token_count=0
+            )
+            db.session.add(sync_log)
+            db.session.commit()
+            
+            return jsonify({
+                'success': False,
+                'error': 'No access token found. Please ensure you are logged into DeepSeek and refresh the page.'
+            }), 400
         
         # Store token
         token = DeepSeekToken(
@@ -312,13 +347,12 @@ def sync_tokens():
             sync_type='auto',
             source=source,
             status='success',
-            token_count=1,
-            error_message=None
+            token_count=1
         )
         db.session.add(sync_log)
         db.session.commit()
         
-        logger.info(f"Tokens synced successfully for user {user_id} from {source}")
+        logger.info(f"Tokens synced successfully for user {user_id}")
         
         return jsonify({
             'success': True,
