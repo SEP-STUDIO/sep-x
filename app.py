@@ -649,7 +649,6 @@ def regenerate_api_key(key_id):
 def proxy_chat():
     try:
         data = request.get_json()
-        logger.info(f"Chat request received: {data.get('messages', [])[:1]}")
         
         user = User.query.get(request.api_key.user_id)
         if not user:
@@ -659,27 +658,41 @@ def proxy_chat():
         if not token:
             return jsonify({'error': 'No valid DeepSeek token. Please sync tokens via Chrome Extension.'}), 401
         
-        logger.info(f"Using token: {token.access_token[:20]}...")
+        # ============ BUILD PROPER DEEPSEEK PAYLOAD ============
+        messages = data.get('messages', [])
+        if not messages:
+            return jsonify({'error': 'No messages provided'}), 400
+        
+        # Get the last user message
+        last_message = messages[-1].get('content', '') if messages else ''
+        
+        # Build payload exactly as DeepSeek expects
+        payload = {
+            "chat_session_id": data.get('chat_session_id'),
+            "prompt": last_message,
+            "model_type": data.get('model_type', 'default'),
+            "parent_message_id": data.get('parent_message_id'),
+            "preempt": data.get('preempt', False),
+            "thinking_enabled": data.get('thinking_enabled', False),
+            "search_enabled": data.get('search_enabled', False),
+            "ref_file_ids": data.get('ref_file_ids', [])
+        }
+        
+        # Remove None values
+        payload = {k: v for k, v in payload.items() if v is not None}
         
         start_time = datetime.utcnow()
         
-        # Get headers with proper authentication
         headers = token.get_auth_headers()
-        logger.info(f"Request headers: {list(headers.keys())}")
         
         response = requests.post(
             'https://chat.deepseek.com/api/v0/chat/completion',
-            json=data,
+            json=payload,
             headers=headers,
             timeout=60
         )
         
         response_time = (datetime.utcnow() - start_time).total_seconds()
-        
-        # Log response status for debugging
-        logger.info(f"DeepSeek response status: {response.status_code}")
-        if response.status_code != 200:
-            logger.error(f"DeepSeek error response: {response.text[:500]}")
         
         log = APILog(
             api_key_id=request.api_key.id,
@@ -699,41 +712,6 @@ def proxy_chat():
         return jsonify({'error': 'DeepSeek API timeout'}), 504
     except Exception as e:
         logger.error(f"Proxy error: {str(e)}")
-        return jsonify({'error': str(e)}), 500
-
-@app.route('/v1/chat/completions/stream', methods=['POST'])
-@require_api_key
-def proxy_chat_stream():
-    try:
-        data = request.get_json()
-        
-        user = User.query.get(request.api_key.user_id)
-        if not user:
-            return jsonify({'error': 'User not found'}), 404
-        
-        token = DeepSeekToken.query.filter_by(user_id=user.id, is_valid=True).first()
-        if not token:
-            return jsonify({'error': 'No valid DeepSeek token'}), 401
-        
-        data['stream'] = True
-        
-        response = requests.post(
-            'https://chat.deepseek.com/api/v0/chat/completion',
-            json=data,
-            headers=token.get_auth_headers(),
-            stream=True,
-            timeout=60
-        )
-        
-        def generate():
-            for line in response.iter_lines():
-                if line:
-                    yield line.decode('utf-8') + '\n'
-        
-        return app.response_class(generate(), mimetype='text/event-stream')
-        
-    except Exception as e:
-        logger.error(f"Stream error: {str(e)}")
         return jsonify({'error': str(e)}), 500
 
 # ============ LOGS ============
