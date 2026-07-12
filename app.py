@@ -65,6 +65,7 @@ class DeepSeekToken(db.Model):
     refresh_token = db.Column(db.Text)
     cookies = db.Column(db.JSON)
     local_storage = db.Column(db.JSON)
+    pow_response = db.Column(db.Text)  # Store PoW response
     
     expires_at = db.Column(db.DateTime)
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
@@ -91,6 +92,9 @@ class DeepSeekToken(db.Model):
         if self.access_token:
             headers['Authorization'] = f'Bearer {self.access_token}'
         
+        if self.pow_response:
+            headers['x-ds-pow-response'] = self.pow_response
+        
         if self.cookies:
             cookie_str = ''
             if isinstance(self.cookies, list):
@@ -111,7 +115,8 @@ class DeepSeekToken(db.Model):
             'expires_at': self.expires_at.isoformat() if self.expires_at else None,
             'created_at': self.created_at.isoformat() if self.created_at else None,
             'is_valid': self.is_valid,
-            'source': self.source
+            'source': self.source,
+            'has_pow': bool(self.pow_response)
         }
 
 class APIKey(db.Model):
@@ -223,15 +228,6 @@ def require_api_key(f):
         return f(*args, **kwargs)
     return decorated
 
-# ============ PRE-SOLVED POW HEADER ============
-# This is a valid PoW captured from the browser
-# It may expire, so update it if needed
-POW_HEADER = "eyJhbGdvcml0aG0iOiJEZWVwU2Vla0hhc2hWMSIsImNoYWxsZW5nZSI6IjIyNjg0MjNlNmI3NjVhMmRhNzQ2NzQzMmNmNjQzNDFkNTdkMGMyMDk5NjU5ZmEzZDkwOGI0NGVmZTM0ZDI4YTkiLCJzYWx0IjoiY2Q3YTllMTBhZDU3NWI3Y2VkM2QiLCJhbnN3ZXIiOjc1Njg4LCJzaWduYXR1cmUiOiJmOWE5NGExNmIwM2YzMWQxMGY2YjEwZmE2OTg5MjU2NGEwZjU5YWQwYWQxZTNlY2I5YTgzNzQ5NDRiOGFhOWY3IiwidGFyZ2V0X3BhdGgiOiIvYXBpL3YwL2NoYXQvY29tcGxldGlvbiJ9"
-
-def get_pow_header():
-    """Return a pre-solved PoW header"""
-    return POW_HEADER
-
 # ============ ROUTES ============
 
 @app.route('/')
@@ -317,8 +313,10 @@ def sync_tokens():
         token_data = data.get('tokens', {})
         cookies = data.get('cookies', {})
         source = data.get('source', 'unknown')
+        pow_response = data.get('pow_response')
         
         logger.info(f"Token sync request from {source} for user {user_id}")
+        logger.info(f"Has PoW: {bool(pow_response)}")
         
         user = User.query.filter_by(user_id=user_id).first()
         if not user:
@@ -344,12 +342,6 @@ def sync_tokens():
                         access_token = cookie.get('value')
                         logger.info("Found token in cookie list: ds_session_id")
                         break
-            elif isinstance(cookies, dict):
-                for cookie_name in ['ds_session_id', 'access_token', 'token', 'auth_token', 'session', 'sid']:
-                    if cookie_name in cookies:
-                        access_token = cookies[cookie_name]
-                        logger.info(f"Found token in cookie dict: {cookie_name}")
-                        break
         
         if not access_token:
             logger.warning(f"No access token found for user {user_id}")
@@ -358,6 +350,7 @@ def sync_tokens():
                 'error': 'No access token found. Please ensure you are logged into DeepSeek.'
             }), 400
         
+        # Delete old tokens and store new one
         DeepSeekToken.query.filter_by(user_id=user.id).delete()
         
         token = DeepSeekToken(
@@ -366,6 +359,7 @@ def sync_tokens():
             refresh_token=token_data.get('refresh_token'),
             cookies=cookies,
             local_storage=token_data.get('localStorage', {}),
+            pow_response=pow_response,
             expires_at=datetime.utcnow() + timedelta(days=7),
             is_valid=True,
             source=source
@@ -382,7 +376,8 @@ def sync_tokens():
             'expires_at': token.expires_at.isoformat(),
             'user_id': user_id,
             'source': source,
-            'token_preview': access_token[:20] + '...'
+            'token_preview': access_token[:20] + '...',
+            'has_pow': bool(token.pow_response)
         }), 200
         
     except Exception as e:
@@ -426,7 +421,8 @@ def token_status():
             'expires_at': token.expires_at.isoformat() if token.expires_at else None,
             'expires_in_days': max(0, days_left),
             'extracted_at': token.created_at.isoformat(),
-            'source': token.source
+            'source': token.source,
+            'has_pow': bool(token.pow_response)
         }), 200
         
     except Exception as e:
@@ -560,9 +556,6 @@ def create_chat_session():
         
         headers = token.get_auth_headers()
         
-        # Use pre-solved PoW
-        headers['x-ds-pow-response'] = get_pow_header()
-        
         # Create session
         response = requests.post(
             'https://chat.deepseek.com/api/v0/chat/session',
@@ -604,28 +597,43 @@ def proxy_chat():
         if not token:
             return jsonify({'error': 'No valid DeepSeek token. Please sync tokens via Chrome Extension.'}), 401
         
-        headers = token.get_auth_headers()
-        
-        # Use pre-solved PoW
-        headers['x-ds-pow-response'] = get_pow_header()
-        
-        # Get session ID from request (required)
-        chat_session_id = data.get('chat_session_id')
-        if not chat_session_id:
+        # Check if we have PoW
+        if not token.pow_response:
             return jsonify({
-                'error': 'chat_session_id is required',
-                'how_to': 'Get it from chat.deepseek.com → DevTools → Network → /api/v0/chat/session'
+                'error': 'PoW required. Please sync tokens via Chrome Extension.',
+                'pow_required': True,
+                'message': 'Click "Sync Now" in the extension to solve PoW'
             }), 400
         
-        # Get messages
+        headers = token.get_auth_headers()
+        
+        # Get or create session
+        chat_session_id = data.get('chat_session_id')
+        
+        if not chat_session_id:
+            logger.info("Creating new chat session...")
+            
+            session_response = requests.post(
+                'https://chat.deepseek.com/api/v0/chat/session',
+                json={},
+                headers=headers,
+                timeout=30
+            )
+            
+            if session_response.status_code != 200:
+                logger.error(f"Session creation failed: {session_response.text}")
+                return jsonify({'error': 'Failed to create session'}), 500
+            
+            chat_session_id = session_response.json()['data']['biz_data']['chat_session']['id']
+            logger.info(f"Session created: {chat_session_id}")
+        
+        # Send chat message
         messages = data.get('messages', [])
         if not messages:
             return jsonify({'error': 'No messages provided'}), 400
         
-        # Get the last user message as prompt
         prompt = messages[-1].get('content', '')
         
-        # Build payload exactly as DeepSeek expects
         payload = {
             "chat_session_id": chat_session_id,
             "parent_message_id": data.get('parent_message_id'),
@@ -638,12 +646,9 @@ def proxy_chat():
             "preempt": data.get('preempt', False)
         }
         
-        # Remove None values
         payload = {k: v for k, v in payload.items() if v is not None}
         
         logger.info(f"Forwarding to DeepSeek: {payload}")
-        
-        start_time = datetime.utcnow()
         
         response = requests.post(
             'https://chat.deepseek.com/api/v0/chat/completion',
@@ -653,12 +658,22 @@ def proxy_chat():
             timeout=60
         )
         
-        response_time = (datetime.utcnow() - start_time).total_seconds()
-        
         logger.info(f"DeepSeek response status: {response.status_code}")
         logger.info(f"DeepSeek response: {response.text[:500]}")
         
-        # Handle streaming response
+        # Log the request
+        log = APILog(
+            api_key_id=request.api_key.id,
+            endpoint='/v1/chat/completions',
+            method='POST',
+            status_code=response.status_code,
+            response_time=0,
+            ip_address=request.remote_addr,
+            user_agent=request.headers.get('User-Agent', '')
+        )
+        db.session.add(log)
+        db.session.commit()
+        
         if data.get('stream', False):
             def generate():
                 for line in response.iter_lines():
@@ -666,21 +681,13 @@ def proxy_chat():
                         yield line.decode('utf-8') + '\n'
             return Response(generate(), mimetype='text/event-stream')
         
-        # Handle non-streaming response
         try:
             result = response.json()
             result['chat_session_id'] = chat_session_id
             return jsonify(result), response.status_code
-        except json.JSONDecodeError:
-            # If response is not JSON, it might be SSE format
-            return jsonify({
-                'error': 'Invalid response from DeepSeek',
-                'raw': response.text[:500],
-                'status_code': response.status_code
-            }), 500
+        except:
+            return jsonify({'error': 'Invalid response from DeepSeek', 'raw': response.text}), 500
         
-    except requests.exceptions.Timeout:
-        return jsonify({'error': 'DeepSeek API timeout'}), 504
     except Exception as e:
         logger.error(f"Chat error: {str(e)}")
         return jsonify({'error': str(e)}), 500
