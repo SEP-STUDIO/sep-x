@@ -223,41 +223,14 @@ def require_api_key(f):
         return f(*args, **kwargs)
     return decorated
 
-# ============ POW FUNCTIONS ============
+# ============ PRE-SOLVED POW HEADER ============
+# This is a valid PoW captured from the browser
+# It may expire, so update it if needed
+POW_HEADER = "eyJhbGdvcml0aG0iOiJEZWVwU2Vla0hhc2hWMSIsImNoYWxsZW5nZSI6IjIyNjg0MjNlNmI3NjVhMmRhNzQ2NzQzMmNmNjQzNDFkNTdkMGMyMDk5NjU5ZmEzZDkwOGI0NGVmZTM0ZDI4YTkiLCJzYWx0IjoiY2Q3YTllMTBhZDU3NWI3Y2VkM2QiLCJhbnN3ZXIiOjc1Njg4LCJzaWduYXR1cmUiOiJmOWE5NGExNmIwM2YzMWQxMGY2YjEwZmE2OTg5MjU2NGEwZjU5YWQwYWQxZTNlY2I5YTgzNzQ5NDRiOGFhOWY3IiwidGFyZ2V0X3BhdGgiOiIvYXBpL3YwL2NoYXQvY29tcGxldGlvbiJ9"
 
-def solve_pow_challenge(challenge: str, salt: str, difficulty: int, target_path: str = "/api/v0/chat/completion") -> str:
-    """
-    Solve the DeepSeek PoW challenge using SHA3-256.
-    Returns the x-ds-pow-response value.
-    """
-    logger.info(f"Solving PoW challenge: difficulty={difficulty}, challenge={challenge[:20]}...")
-    answer = 0
-    max_attempts = 10000000
-    
-    while answer < max_attempts:
-        data = f"{challenge}{salt}{answer}"
-        hash_result = hashlib.sha3_256(data.encode()).hexdigest()
-        
-        if hash_result.startswith('0' * difficulty):
-            break
-        
-        answer += 1
-    
-    if answer >= max_attempts:
-        raise Exception(f"Could not solve PoW challenge after {max_attempts} attempts")
-    
-    pow_data = {
-        "algorithm": "DeepSeekHashV1",
-        "challenge": challenge,
-        "salt": salt,
-        "answer": answer,
-        "signature": hash_result,
-        "target_path": target_path
-    }
-    
-    pow_response = base64.b64encode(json.dumps(pow_data).encode()).decode()
-    logger.info(f"PoW solved in {answer} attempts")
-    return pow_response
+def get_pow_header():
+    """Return a pre-solved PoW header"""
+    return POW_HEADER
 
 # ============ ROUTES ============
 
@@ -573,7 +546,7 @@ def regenerate_api_key(key_id):
 @app.route('/api/chat/session', methods=['POST'])
 @require_api_key
 def create_chat_session():
-    """Create a new DeepSeek chat session with PoW"""
+    """Create a new DeepSeek chat session"""
     try:
         logger.info("Session creation request received")
         
@@ -587,29 +560,8 @@ def create_chat_session():
         
         headers = token.get_auth_headers()
         
-        # Get PoW challenge
-        challenge_response = requests.post(
-            'https://chat.deepseek.com/api/v0/chat/create_pow_challenge',
-            json={"target_path": "/api/v0/chat/completion"},
-            headers=headers,
-            timeout=10
-        )
-        
-        if challenge_response.status_code != 200:
-            logger.error(f"PoW challenge failed: {challenge_response.text}")
-            return jsonify({'error': 'Failed to get PoW challenge'}), 500
-        
-        challenge_data = challenge_response.json()['data']['biz_data']['challenge']
-        
-        # Solve PoW
-        pow_response = solve_pow_challenge(
-            challenge=challenge_data['challenge'],
-            salt=challenge_data['salt'],
-            difficulty=challenge_data['difficulty'],
-            target_path="/api/v0/chat/completion"
-        )
-        
-        headers['x-ds-pow-response'] = pow_response
+        # Use pre-solved PoW
+        headers['x-ds-pow-response'] = get_pow_header()
         
         # Create session
         response = requests.post(
@@ -655,40 +607,10 @@ def proxy_chat():
         # ============ STEP 1: Get Headers ============
         headers = token.get_auth_headers()
         
-        # ============ STEP 2: Get PoW Challenge ============
-        logger.info("Getting PoW challenge...")
-        challenge_response = requests.post(
-            'https://chat.deepseek.com/api/v0/chat/create_pow_challenge',
-            json={"target_path": "/api/v0/chat/completion"},
-            headers=headers,
-            timeout=10
-        )
+        # ============ STEP 2: Use Pre-solved PoW ============
+        headers['x-ds-pow-response'] = get_pow_header()
         
-        if challenge_response.status_code != 200:
-            logger.error(f"PoW challenge failed: {challenge_response.text}")
-            return jsonify({'error': 'Failed to get PoW challenge'}), 500
-        
-        challenge_data = challenge_response.json()['data']['biz_data']['challenge']
-        logger.info(f"PoW challenge received: difficulty={challenge_data['difficulty']}")
-        
-        # ============ STEP 3: Solve PoW ============
-        logger.info("Solving PoW challenge...")
-        start_time = time.time()
-        
-        pow_response = solve_pow_challenge(
-            challenge=challenge_data['challenge'],
-            salt=challenge_data['salt'],
-            difficulty=challenge_data['difficulty'],
-            target_path="/api/v0/chat/completion"
-        )
-        
-        elapsed = time.time() - start_time
-        logger.info(f"PoW solved in {elapsed:.2f} seconds")
-        
-        # ============ STEP 4: Add PoW to Headers ============
-        headers['x-ds-pow-response'] = pow_response
-        
-        # ============ STEP 5: Get or Create Session ============
+        # ============ STEP 3: Get or Create Session ============
         chat_session_id = data.get('chat_session_id')
         
         if not chat_session_id:
@@ -713,7 +635,7 @@ def proxy_chat():
             
             logger.info(f"Session created: {chat_session_id}")
         
-        # ============ STEP 6: Send Chat Message ============
+        # ============ STEP 4: Send Chat Message ============
         messages = data.get('messages', [])
         if not messages:
             return jsonify({'error': 'No messages provided'}), 400
