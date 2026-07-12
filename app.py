@@ -79,10 +79,18 @@ class DeepSeekToken(db.Model):
             'Accept': 'application/json',
             'Origin': 'https://chat.deepseek.com',
             'Referer': 'https://chat.deepseek.com/',
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/150.0.0.0 Safari/537.36',
+            # ============ DEEPSEEK REQUIRED HEADERS ============
+            'x-client-bundle-id': 'com.deepseek.chat',
+            'x-client-platform': 'web',
+            'x-client-version': '2.2.0',
+            'x-client-locale': 'en_US',
+            'x-client-timezone-offset': '3600'
         }
+        
         if self.access_token:
             headers['Authorization'] = f'Bearer {self.access_token}'
+        
         if self.cookies:
             cookie_str = ''
             if isinstance(self.cookies, list):
@@ -93,6 +101,7 @@ class DeepSeekToken(db.Model):
                 cookie_str = '; '.join([f'{k}={v}' for k, v in self.cookies.items()])
             if cookie_str:
                 headers['Cookie'] = cookie_str.rstrip('; ')
+        
         return headers
     
     def to_dict(self):
@@ -566,6 +575,7 @@ def proxy_chat():
         start_time = datetime.utcnow()
         
         headers = token.get_auth_headers()
+        logger.info(f"Using headers: {list(headers.keys())}")
         
         response = requests.post(
             'https://chat.deepseek.com/api/v0/chat/completion',
