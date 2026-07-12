@@ -1,4 +1,4 @@
-from flask import Flask, jsonify, request, session
+from flask import Flask, jsonify, request, session, Response, stream_with_context
 from flask_cors import CORS
 from flask_sqlalchemy import SQLAlchemy
 from datetime import datetime, timedelta
@@ -80,7 +80,6 @@ class DeepSeekToken(db.Model):
             'Origin': 'https://chat.deepseek.com',
             'Referer': 'https://chat.deepseek.com/',
             'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/150.0.0.0 Safari/537.36',
-            # ============ DEEPSEEK REQUIRED HEADERS ============
             'x-client-bundle-id': 'com.deepseek.chat',
             'x-client-platform': 'web',
             'x-client-version': '2.2.0',
@@ -242,6 +241,7 @@ def index():
                 'GET /api/keys': 'List API keys',
                 'DELETE /api/keys/<id>': 'Revoke API key',
                 'POST /api/keys/<id>/regenerate': 'Regenerate API key',
+                'POST /api/chat/session': 'Create chat session',
                 'POST /v1/chat/completions': 'Chat with DeepSeek (requires X-API-Key)',
                 'POST /v1/chat/completions/stream': 'Stream chat (requires X-API-Key)',
                 'GET /api/logs': 'View API logs'
@@ -527,7 +527,41 @@ def regenerate_api_key(key_id):
         'message': 'API key regenerated'
     }), 200
 
-# ============ CHAT PROXY ============
+# ============ CHAT SESSION ============
+
+@app.route('/api/chat/session', methods=['POST'])
+@require_api_key
+def create_chat_session():
+    """Create a new DeepSeek chat session"""
+    try:
+        user = User.query.get(request.api_key.user_id)
+        if not user:
+            return jsonify({'error': 'User not found'}), 404
+        
+        token = DeepSeekToken.query.filter_by(user_id=user.id, is_valid=True).first()
+        if not token:
+            return jsonify({'error': 'No valid DeepSeek token'}), 401
+        
+        headers = token.get_auth_headers()
+        
+        response = requests.post(
+            'https://chat.deepseek.com/api/v0/chat/session',
+            json={},
+            headers=headers,
+            timeout=30
+        )
+        
+        if response.status_code != 200:
+            logger.error(f"Session creation failed: {response.text}")
+            return jsonify({'error': 'Failed to create session'}), response.status_code
+        
+        return jsonify(response.json()), response.status_code
+        
+    except Exception as e:
+        logger.error(f"Session creation error: {str(e)}")
+        return jsonify({'error': str(e)}), 500
+
+# ============ CHAT COMPLETION ============
 
 @app.route('/v1/chat/completions', methods=['POST'])
 @require_api_key
@@ -544,27 +578,52 @@ def proxy_chat():
         if not token:
             return jsonify({'error': 'No valid DeepSeek token. Please sync tokens via Chrome Extension.'}), 401
         
-        # ============ EXACT DEEPSEEK PAYLOAD FORMAT ============
-        chat_session_id = data.get('chat_session_id') or str(uuid.uuid4())
-        parent_message_id = data.get('parent_message_id')
+        # ============ CHECK IF SESSION EXISTS ============
+        chat_session_id = data.get('chat_session_id')
         
+        # If no session, create one
+        if not chat_session_id:
+            logger.info("No session ID provided, creating a new session...")
+            headers = token.get_auth_headers()
+            
+            session_response = requests.post(
+                'https://chat.deepseek.com/api/v0/chat/session',
+                json={},
+                headers=headers,
+                timeout=30
+            )
+            
+            if session_response.status_code != 200:
+                logger.error(f"Session creation failed: {session_response.text}")
+                return jsonify({'error': 'Failed to create chat session'}), 500
+            
+            session_data = session_response.json()
+            chat_session_id = session_data.get('data', {}).get('biz_data', {}).get('chat_session', {}).get('id')
+            
+            if not chat_session_id:
+                logger.error(f"No session ID in response: {session_data}")
+                return jsonify({'error': 'Failed to get session ID'}), 500
+            
+            logger.info(f"Created new session: {chat_session_id}")
+        
+        # ============ BUILD DEEPSEEK COMPLETION PAYLOAD ============
         messages = data.get('messages', [])
         if not messages:
             return jsonify({'error': 'No messages provided'}), 400
         
         prompt = messages[-1].get('content', '') if messages else ''
         
-        # Build payload exactly as DeepSeek expects
+        # Build payload exactly as DeepSeek expects (from your console)
         payload = {
             "chat_session_id": chat_session_id,
-            "parent_message_id": parent_message_id,
-            "model_type": data.get('model_type'),
+            "parent_message_id": data.get('parent_message_id'),
+            "model_type": data.get('model_type', 'default'),
             "prompt": prompt,
-            "preempt": data.get('preempt', False),
+            "ref_file_ids": data.get('ref_file_ids', []),
             "thinking_enabled": data.get('thinking_enabled', False),
             "search_enabled": data.get('search_enabled', False),
-            "ref_file_ids": data.get('ref_file_ids', []),
-            "action": data.get('action')
+            "action": data.get('action'),
+            "preempt": data.get('preempt', False)
         }
         
         # Remove None values
@@ -575,32 +634,29 @@ def proxy_chat():
         start_time = datetime.utcnow()
         
         headers = token.get_auth_headers()
-        logger.info(f"Using headers: {list(headers.keys())}")
         
         response = requests.post(
             'https://chat.deepseek.com/api/v0/chat/completion',
             json=payload,
             headers=headers,
+            stream=data.get('stream', False),
             timeout=60
         )
         
         response_time = (datetime.utcnow() - start_time).total_seconds()
         
         logger.info(f"DeepSeek response status: {response.status_code}")
-        logger.info(f"DeepSeek response body: {response.text[:500]}")
+        logger.info(f"DeepSeek response headers: {dict(response.headers)}")
         
-        log = APILog(
-            api_key_id=request.api_key.id,
-            endpoint='/v1/chat/completions',
-            method='POST',
-            status_code=response.status_code,
-            response_time=response_time,
-            ip_address=request.remote_addr,
-            user_agent=request.headers.get('User-Agent', '')
-        )
-        db.session.add(log)
-        db.session.commit()
+        # If streaming
+        if data.get('stream', False):
+            def generate():
+                for line in response.iter_lines():
+                    if line:
+                        yield line.decode('utf-8') + '\n'
+            return Response(generate(), mimetype='text/event-stream')
         
+        # Non-streaming: collect the full response
         try:
             result = response.json()
             result['chat_session_id'] = chat_session_id
@@ -619,54 +675,8 @@ def proxy_chat():
 def proxy_chat_stream():
     try:
         data = request.get_json()
-        
-        user = User.query.get(request.api_key.user_id)
-        if not user:
-            return jsonify({'error': 'User not found'}), 404
-        
-        token = DeepSeekToken.query.filter_by(user_id=user.id, is_valid=True).first()
-        if not token:
-            return jsonify({'error': 'No valid DeepSeek token'}), 401
-        
-        # ============ EXACT DEEPSEEK PAYLOAD FORMAT ============
-        chat_session_id = data.get('chat_session_id') or str(uuid.uuid4())
-        parent_message_id = data.get('parent_message_id')
-        
-        messages = data.get('messages', [])
-        if not messages:
-            return jsonify({'error': 'No messages provided'}), 400
-        
-        prompt = messages[-1].get('content', '') if messages else ''
-        
-        payload = {
-            "chat_session_id": chat_session_id,
-            "parent_message_id": parent_message_id,
-            "model_type": data.get('model_type'),
-            "prompt": prompt,
-            "preempt": data.get('preempt', False),
-            "thinking_enabled": data.get('thinking_enabled', False),
-            "search_enabled": data.get('search_enabled', False),
-            "ref_file_ids": data.get('ref_file_ids', []),
-            "action": data.get('action')
-        }
-        
-        payload = {k: v for k, v in payload.items() if v is not None}
-        payload['stream'] = True
-        
-        response = requests.post(
-            'https://chat.deepseek.com/api/v0/chat/completion',
-            json=payload,
-            headers=token.get_auth_headers(),
-            stream=True,
-            timeout=60
-        )
-        
-        def generate():
-            for line in response.iter_lines():
-                if line:
-                    yield line.decode('utf-8') + '\n'
-        
-        return app.response_class(generate(), mimetype='text/event-stream')
+        data['stream'] = True
+        return proxy_chat()
         
     except Exception as e:
         logger.error(f"Stream error: {str(e)}")
