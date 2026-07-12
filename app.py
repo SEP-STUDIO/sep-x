@@ -551,7 +551,7 @@ def create_chat_session():
         logger.error(f"Session creation error: {str(e)}")
         return jsonify({'error': str(e)}), 500
 
-# ============ CHAT COMPLETION ============
+# ============ CHAT COMPLETION WITH POW ============
 
 @app.route('/v1/chat/completions', methods=['POST'])
 @require_api_key
@@ -566,14 +566,49 @@ def proxy_chat():
         
         token = DeepSeekToken.query.filter_by(user_id=user.id, is_valid=True).first()
         if not token:
-            return jsonify({'error': 'No valid DeepSeek token. Please sync tokens via Chrome Extension.'}), 401
+            return jsonify({'error': 'No valid DeepSeek token'}), 401
         
+        # ============ STEP 1: Get Headers ============
+        headers = token.get_auth_headers()
+        
+        # ============ STEP 2: Get PoW Challenge ============
+        logger.info("Getting PoW challenge...")
+        challenge_response = requests.post(
+            'https://chat.deepseek.com/api/v0/chat/create_pow_challenge',
+            json={"target_path": "/api/v0/chat/completion"},
+            headers=headers,
+            timeout=10
+        )
+        
+        if challenge_response.status_code != 200:
+            logger.error(f"PoW challenge failed: {challenge_response.text}")
+            return jsonify({'error': 'Failed to get PoW challenge'}), 500
+        
+        challenge_data = challenge_response.json()['data']['biz_data']['challenge']
+        logger.info(f"PoW challenge received: difficulty={challenge_data['difficulty']}")
+        
+        # ============ STEP 3: Solve PoW ============
+        logger.info("Solving PoW challenge...")
+        start_time = time.time()
+        
+        pow_response = solve_pow_challenge(
+            challenge=challenge_data['challenge'],
+            salt=challenge_data['salt'],
+            difficulty=challenge_data['difficulty'],
+            target_path="/api/v0/chat/completion"
+        )
+        
+        elapsed = time.time() - start_time
+        logger.info(f"PoW solved in {elapsed:.2f} seconds")
+        
+        # ============ STEP 4: Add PoW to Headers ============
+        headers['x-ds-pow-response'] = pow_response
+        
+        # ============ STEP 5: Get or Create Session ============
         chat_session_id = data.get('chat_session_id')
         
         if not chat_session_id:
-            logger.info("No session ID provided, creating a new session...")
-            headers = token.get_auth_headers()
-            
+            logger.info("Creating new chat session...")
             session_response = requests.post(
                 'https://chat.deepseek.com/api/v0/chat/session',
                 json={},
@@ -583,42 +618,28 @@ def proxy_chat():
             
             if session_response.status_code != 200:
                 logger.error(f"Session creation failed: {session_response.text}")
-                return jsonify({'error': 'Failed to create chat session'}), 500
+                return jsonify({'error': 'Failed to create session'}), 500
             
-            session_data = session_response.json()
-            chat_session_id = session_data.get('data', {}).get('biz_data', {}).get('chat_session', {}).get('id')
-            
-            if not chat_session_id:
-                logger.error(f"No session ID in response: {session_data}")
-                return jsonify({'error': 'Failed to get session ID'}), 500
-            
-            logger.info(f"Created new session: {chat_session_id}")
+            chat_session_id = session_response.json()['data']['biz_data']['chat_session']['id']
+            logger.info(f"Session created: {chat_session_id}")
         
+        # ============ STEP 6: Send Chat Message ============
         messages = data.get('messages', [])
         if not messages:
             return jsonify({'error': 'No messages provided'}), 400
         
-        prompt = messages[-1].get('content', '') if messages else ''
+        prompt = messages[-1].get('content', '')
         
         payload = {
             "chat_session_id": chat_session_id,
-            "parent_message_id": data.get('parent_message_id'),
-            "model_type": data.get('model_type', 'default'),
             "prompt": prompt,
-            "ref_file_ids": data.get('ref_file_ids', []),
+            "model_type": data.get('model_type', 'default'),
             "thinking_enabled": data.get('thinking_enabled', False),
             "search_enabled": data.get('search_enabled', False),
-            "action": data.get('action'),
             "preempt": data.get('preempt', False)
         }
         
-        payload = {k: v for k, v in payload.items() if v is not None}
-        
-        logger.info(f"Forwarding to DeepSeek: {payload}")
-        
-        start_time = datetime.utcnow()
-        
-        headers = token.get_auth_headers()
+        logger.info(f"Sending chat message to DeepSeek: {payload}")
         
         response = requests.post(
             'https://chat.deepseek.com/api/v0/chat/completion',
@@ -628,10 +649,8 @@ def proxy_chat():
             timeout=60
         )
         
-        response_time = (datetime.utcnow() - start_time).total_seconds()
-        
         logger.info(f"DeepSeek response status: {response.status_code}")
-        logger.info(f"DeepSeek response headers: {dict(response.headers)}")
+        logger.info(f"DeepSeek response: {response.text[:500]}")
         
         if data.get('stream', False):
             def generate():
@@ -647,22 +666,8 @@ def proxy_chat():
         except:
             return jsonify({'error': 'Invalid response from DeepSeek', 'raw': response.text}), 500
         
-    except requests.exceptions.Timeout:
-        return jsonify({'error': 'DeepSeek API timeout'}), 504
     except Exception as e:
-        logger.error(f"Proxy error: {str(e)}")
-        return jsonify({'error': str(e)}), 500
-
-@app.route('/v1/chat/completions/stream', methods=['POST'])
-@require_api_key
-def proxy_chat_stream():
-    try:
-        data = request.get_json()
-        data['stream'] = True
-        return proxy_chat()
-        
-    except Exception as e:
-        logger.error(f"Stream error: {str(e)}")
+        logger.error(f"Chat error: {str(e)}")
         return jsonify({'error': str(e)}), 500
 
 # ============ LOGS ============
