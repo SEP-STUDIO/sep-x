@@ -534,6 +534,8 @@ def regenerate_api_key(key_id):
 def create_chat_session():
     """Create a new DeepSeek chat session"""
     try:
+        logger.info("Session creation request received")
+        
         user = User.query.get(request.api_key.user_id)
         if not user:
             return jsonify({'error': 'User not found'}), 404
@@ -543,7 +545,9 @@ def create_chat_session():
             return jsonify({'error': 'No valid DeepSeek token'}), 401
         
         headers = token.get_auth_headers()
+        logger.info(f"Session creation headers: {list(headers.keys())}")
         
+        # Try to create session
         response = requests.post(
             'https://chat.deepseek.com/api/v0/chat/session',
             json={},
@@ -551,9 +555,14 @@ def create_chat_session():
             timeout=30
         )
         
+        logger.info(f"DeepSeek session response status: {response.status_code}")
+        logger.info(f"DeepSeek session response: {response.text[:500]}")
+        
         if response.status_code != 200:
-            logger.error(f"Session creation failed: {response.text}")
-            return jsonify({'error': 'Failed to create session'}), response.status_code
+            return jsonify({
+                'error': 'Failed to create session',
+                'details': response.text
+            }), response.status_code
         
         return jsonify(response.json()), response.status_code
         
@@ -581,7 +590,7 @@ def proxy_chat():
         # ============ CHECK IF SESSION EXISTS ============
         chat_session_id = data.get('chat_session_id')
         
-        # If no session, create one
+        # If no session, create one automatically
         if not chat_session_id:
             logger.info("No session ID provided, creating a new session...")
             headers = token.get_auth_headers()
