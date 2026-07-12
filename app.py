@@ -80,13 +80,8 @@ class DeepSeekToken(db.Model):
             'Referer': 'https://chat.deepseek.com/',
             'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
         }
-        
-        # Use the stored access_token
         if self.access_token:
             headers['Authorization'] = f'Bearer {self.access_token}'
-            logger.info(f"Using Authorization header with token: {self.access_token[:20]}...")
-        
-        # Also add cookies if available
         if self.cookies:
             cookie_str = ''
             if isinstance(self.cookies, list):
@@ -97,8 +92,6 @@ class DeepSeekToken(db.Model):
                 cookie_str = '; '.join([f'{k}={v}' for k, v in self.cookies.items()])
             if cookie_str:
                 headers['Cookie'] = cookie_str.rstrip('; ')
-                logger.info("Added cookies to headers")
-        
         return headers
     
     def to_dict(self):
@@ -241,8 +234,7 @@ def index():
                 'POST /api/keys/<id>/regenerate': 'Regenerate API key',
                 'POST /v1/chat/completions': 'Chat with DeepSeek (requires X-API-Key)',
                 'POST /v1/chat/completions/stream': 'Stream chat (requires X-API-Key)',
-                'GET /api/logs': 'View API logs',
-                'GET /api/debug/token': 'Debug token (temporary)'
+                'GET /api/logs': 'View API logs'
             }
         }), 200
 
@@ -303,8 +295,6 @@ def sync_tokens():
         source = data.get('source', 'unknown')
         
         logger.info(f"Token sync request from {source} for user {user_id}")
-        logger.info(f"Token data keys: {list(token_data.keys())}")
-        logger.info(f"Cookies type: {type(cookies)}")
         
         user = User.query.filter_by(user_id=user_id).first()
         if not user:
@@ -319,26 +309,17 @@ def sync_tokens():
         
         access_token = None
         
-        # ============ IMPROVED TOKEN EXTRACTION ============
-        
-        # Method 1: Check token_data directly
         if token_data.get('access_token'):
             access_token = token_data.get('access_token')
-            logger.info("Found token in token_data")
+            logger.info(f"Found token in token_data: {access_token[:20]}...")
         
-        # Method 2: Extract from cookies list
         if not access_token and cookies:
             if isinstance(cookies, list):
                 for cookie in cookies:
-                    if isinstance(cookie, dict):
-                        name = cookie.get('name', '')
-                        value = cookie.get('value', '')
-                        # Look for any token-like cookie
-                        if name == 'ds_session_id' or 'token' in name.lower() or 'auth' in name.lower():
-                            if len(value) > 10:
-                                access_token = value
-                                logger.info(f"Found token in cookie: {name}")
-                                break
+                    if isinstance(cookie, dict) and cookie.get('name') == 'ds_session_id':
+                        access_token = cookie.get('value')
+                        logger.info("Found token in cookie list: ds_session_id")
+                        break
             elif isinstance(cookies, dict):
                 for cookie_name in ['ds_session_id', 'access_token', 'token', 'auth_token', 'session', 'sid']:
                     if cookie_name in cookies:
@@ -346,46 +327,13 @@ def sync_tokens():
                         logger.info(f"Found token in cookie dict: {cookie_name}")
                         break
         
-        # Method 3: Try to get from localStorage via token_data
-        if not access_token and token_data.get('localStorage'):
-            local_data = token_data.get('localStorage', {})
-            if isinstance(local_data, dict):
-                for key in ['access_token', 'token', 'auth_token', 'session']:
-                    if key in local_data:
-                        access_token = local_data[key]
-                        logger.info(f"Found token in localStorage: {key}")
-                        break
-        
-        # Method 4: Try to get from token_data's cookies field
-        if not access_token and token_data.get('cookies'):
-            tcookies = token_data.get('cookies')
-            if isinstance(tcookies, dict):
-                for cookie_name in ['ds_session_id', 'access_token', 'token', 'auth_token']:
-                    if cookie_name in tcookies:
-                        access_token = tcookies[cookie_name]
-                        logger.info(f"Found token in token_data.cookies: {cookie_name}")
-                        break
-        
         if not access_token:
             logger.warning(f"No access token found for user {user_id}")
-            
-            sync_log = SyncHistory(
-                user_id=user.id,
-                sync_type='manual',
-                source=source,
-                status='failed',
-                error_message='No access token found',
-                token_count=0
-            )
-            db.session.add(sync_log)
-            db.session.commit()
-            
             return jsonify({
                 'success': False,
-                'error': 'No access token found. Please ensure you are logged into DeepSeek and refresh the page.'
+                'error': 'No access token found. Please ensure you are logged into DeepSeek.'
             }), 400
         
-        # Delete old tokens and store new one
         DeepSeekToken.query.filter_by(user_id=user.id).delete()
         
         token = DeepSeekToken(
@@ -400,24 +348,6 @@ def sync_tokens():
         )
         
         db.session.add(token)
-        db.session.commit()
-        
-        # Verify token was saved
-        saved_token = DeepSeekToken.query.filter_by(user_id=user.id, is_valid=True).first()
-        if saved_token:
-            logger.info(f"Token verified in database for user {user_id}")
-            logger.info(f"Token preview: {saved_token.access_token[:20]}...")
-        else:
-            logger.error(f"Token NOT saved in database for user {user_id}")
-        
-        sync_log = SyncHistory(
-            user_id=user.id,
-            sync_type='manual',
-            source=source,
-            status='success',
-            token_count=1
-        )
-        db.session.add(sync_log)
         db.session.commit()
         
         logger.info(f"Tokens synced successfully for user {user_id}")
@@ -472,10 +402,7 @@ def token_status():
             'expires_at': token.expires_at.isoformat() if token.expires_at else None,
             'expires_in_days': max(0, days_left),
             'extracted_at': token.created_at.isoformat(),
-            'source': token.source,
-            'has_access_token': bool(token.access_token),
-            'has_cookies': bool(token.cookies),
-            'token_preview': token.access_token[:20] + '...' if token.access_token else None
+            'source': token.source
         }), 200
         
     except Exception as e:
@@ -503,58 +430,6 @@ def clear_tokens():
     except Exception as e:
         logger.error(f"Clear tokens error: {str(e)}")
         return jsonify({'error': str(e)}), 500
-
-@app.route('/api/sync/history', methods=['GET'])
-def get_sync_history():
-    try:
-        user_id = request.args.get('user_id', 'default')
-        limit = int(request.args.get('limit', 20))
-        
-        user = User.query.filter_by(user_id=user_id).first()
-        if not user:
-            return jsonify([]), 200
-        
-        history = SyncHistory.query.filter_by(
-            user_id=user.id
-        ).order_by(
-            SyncHistory.created_at.desc()
-        ).limit(limit).all()
-        
-        return jsonify([h.to_dict() for h in history]), 200
-        
-    except Exception as e:
-        logger.error(f"Sync history error: {str(e)}")
-        return jsonify({'error': str(e)}), 500
-
-# ============ DEBUG TOKEN ENDPOINT ============
-
-@app.route('/api/debug/token', methods=['GET'])
-def debug_token():
-    user_id = request.args.get('user_id', 'default')
-    user = User.query.filter_by(user_id=user_id).first()
-    
-    if not user:
-        return jsonify({'error': 'User not found'}), 404
-    
-    token = DeepSeekToken.query.filter_by(user_id=user.id, is_valid=True).first()
-    
-    if not token:
-        return jsonify({
-            'user_id': user_id,
-            'has_token': False,
-            'message': 'No valid token found'
-        }), 200
-    
-    return jsonify({
-        'user_id': user_id,
-        'has_token': bool(token.access_token),
-        'token_preview': token.access_token[:30] + '...' if token.access_token else None,
-        'expires_at': token.expires_at.isoformat() if token.expires_at else None,
-        'source': token.source,
-        'has_cookies': bool(token.cookies),
-        'cookies_count': len(token.cookies) if token.cookies else 0,
-        'is_valid': token.is_valid
-    }), 200
 
 # ============ API KEY MANAGEMENT ============
 
@@ -649,6 +524,7 @@ def regenerate_api_key(key_id):
 def proxy_chat():
     try:
         data = request.get_json()
+        logger.info(f"Chat request received: {data}")
         
         user = User.query.get(request.api_key.user_id)
         if not user:
@@ -658,15 +534,13 @@ def proxy_chat():
         if not token:
             return jsonify({'error': 'No valid DeepSeek token. Please sync tokens via Chrome Extension.'}), 401
         
-        # ============ BUILD PROPER DEEPSEEK PAYLOAD ============
+        # Build proper DeepSeek payload
         messages = data.get('messages', [])
         if not messages:
             return jsonify({'error': 'No messages provided'}), 400
         
-        # Get the last user message
         last_message = messages[-1].get('content', '') if messages else ''
         
-        # Build payload exactly as DeepSeek expects
         payload = {
             "chat_session_id": data.get('chat_session_id'),
             "prompt": last_message,
@@ -678,12 +552,14 @@ def proxy_chat():
             "ref_file_ids": data.get('ref_file_ids', [])
         }
         
-        # Remove None values
         payload = {k: v for k, v in payload.items() if v is not None}
+        
+        logger.info(f"Forwarding to DeepSeek: {payload}")
         
         start_time = datetime.utcnow()
         
         headers = token.get_auth_headers()
+        logger.info(f"Using headers: {list(headers.keys())}")
         
         response = requests.post(
             'https://chat.deepseek.com/api/v0/chat/completion',
@@ -693,6 +569,9 @@ def proxy_chat():
         )
         
         response_time = (datetime.utcnow() - start_time).total_seconds()
+        
+        logger.info(f"DeepSeek response status: {response.status_code}")
+        logger.info(f"DeepSeek response body: {response.text[:500]}")
         
         log = APILog(
             api_key_id=request.api_key.id,
@@ -706,12 +585,50 @@ def proxy_chat():
         db.session.add(log)
         db.session.commit()
         
-        return jsonify(response.json()), response.status_code
+        try:
+            return jsonify(response.json()), response.status_code
+        except:
+            return jsonify({'error': 'Invalid response from DeepSeek', 'raw': response.text}), 500
         
     except requests.exceptions.Timeout:
         return jsonify({'error': 'DeepSeek API timeout'}), 504
     except Exception as e:
         logger.error(f"Proxy error: {str(e)}")
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/v1/chat/completions/stream', methods=['POST'])
+@require_api_key
+def proxy_chat_stream():
+    try:
+        data = request.get_json()
+        
+        user = User.query.get(request.api_key.user_id)
+        if not user:
+            return jsonify({'error': 'User not found'}), 404
+        
+        token = DeepSeekToken.query.filter_by(user_id=user.id, is_valid=True).first()
+        if not token:
+            return jsonify({'error': 'No valid DeepSeek token'}), 401
+        
+        data['stream'] = True
+        
+        response = requests.post(
+            'https://chat.deepseek.com/api/v0/chat/completion',
+            json=data,
+            headers=token.get_auth_headers(),
+            stream=True,
+            timeout=60
+        )
+        
+        def generate():
+            for line in response.iter_lines():
+                if line:
+                    yield line.decode('utf-8') + '\n'
+        
+        return app.response_class(generate(), mimetype='text/event-stream')
+        
+    except Exception as e:
+        logger.error(f"Stream error: {str(e)}")
         return jsonify({'error': str(e)}), 500
 
 # ============ LOGS ============
