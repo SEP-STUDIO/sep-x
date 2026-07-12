@@ -9,6 +9,9 @@ import json
 import logging
 import os
 import uuid
+import hashlib
+import base64
+import time
 from functools import wraps
 from dotenv import load_dotenv
 from bs4 import BeautifulSoup
@@ -82,8 +85,7 @@ class DeepSeekToken(db.Model):
             'x-client-platform': 'web',
             'x-client-version': '2.2.0',
             'x-client-locale': 'en_US',
-            'x-client-timezone-offset': '3600',
-            'x-ds-pow-response': 'eyJhbGdvcml0aG0iOiJEZWVwU2Vla0hhc2hWMSIsImNoYWxsZW5nZSI6ImViYTAxMTc3NjM5MGI5MTk0ZTVlYzc1NzJlOGRhYzlkNDQ0ZjM1MjIzOWFjNGZiODMwYThkYTgzMWY4NmNjYzciLCJzYWx0IjoiMjdkMGFiYjQ3MTNhYTczMzQzYTAiLCJhbnN3ZXIiOjc4NTgxLCJzaWduYXR1cmUiOiJjYWJjMjIwNmE4MzgyOTIwMGE2OTk2ZjkyM2MxNzAyNTZhNWQxYzk1ZDI4OTYzMDk3ZjI1MzljNGI0ZjFlYTUwIiwidGFyZ2V0X3BhdGgiOiIvYXBpL3YwL2NoYXQvY29tcGxldGlvbiJ9'
+            'x-client-timezone-offset': '3600'
         }
         
         if self.access_token:
@@ -220,6 +222,42 @@ def require_api_key(f):
         request.api_key = key
         return f(*args, **kwargs)
     return decorated
+
+# ============ POW FUNCTIONS ============
+
+def solve_pow_challenge(challenge: str, salt: str, difficulty: int, target_path: str = "/api/v0/chat/completion") -> str:
+    """
+    Solve the DeepSeek PoW challenge using SHA3-256.
+    Returns the x-ds-pow-response value.
+    """
+    logger.info(f"Solving PoW challenge: difficulty={difficulty}, challenge={challenge[:20]}...")
+    answer = 0
+    max_attempts = 10000000
+    
+    while answer < max_attempts:
+        data = f"{challenge}{salt}{answer}"
+        hash_result = hashlib.sha3_256(data.encode()).hexdigest()
+        
+        if hash_result.startswith('0' * difficulty):
+            break
+        
+        answer += 1
+    
+    if answer >= max_attempts:
+        raise Exception(f"Could not solve PoW challenge after {max_attempts} attempts")
+    
+    pow_data = {
+        "algorithm": "DeepSeekHashV1",
+        "challenge": challenge,
+        "salt": salt,
+        "answer": answer,
+        "signature": hash_result,
+        "target_path": target_path
+    }
+    
+    pow_response = base64.b64encode(json.dumps(pow_data).encode()).decode()
+    logger.info(f"PoW solved in {answer} attempts")
+    return pow_response
 
 # ============ ROUTES ============
 
@@ -422,6 +460,28 @@ def token_status():
         logger.error(f"Token status error: {str(e)}")
         return jsonify({'error': str(e)}), 500
 
+@app.route('/api/tokens/clear', methods=['POST'])
+def clear_tokens():
+    try:
+        data = request.get_json()
+        user_id = data.get('user_id', 'default') if data else 'default'
+        
+        user = User.query.filter_by(user_id=user_id).first()
+        if user:
+            DeepSeekToken.query.filter_by(user_id=user.id).delete()
+            db.session.commit()
+            logger.info(f"Tokens cleared for user {user_id}")
+        
+        return jsonify({
+            'success': True,
+            'message': 'Tokens cleared successfully',
+            'user_id': user_id
+        }), 200
+        
+    except Exception as e:
+        logger.error(f"Clear tokens error: {str(e)}")
+        return jsonify({'error': str(e)}), 500
+
 # ============ API KEY MANAGEMENT ============
 
 @app.route('/api/keys', methods=['POST'])
@@ -513,7 +573,7 @@ def regenerate_api_key(key_id):
 @app.route('/api/chat/session', methods=['POST'])
 @require_api_key
 def create_chat_session():
-    """Create a new DeepSeek chat session"""
+    """Create a new DeepSeek chat session with PoW"""
     try:
         logger.info("Session creation request received")
         
@@ -526,8 +586,32 @@ def create_chat_session():
             return jsonify({'error': 'No valid DeepSeek token'}), 401
         
         headers = token.get_auth_headers()
-        logger.info(f"Session creation headers: {list(headers.keys())}")
         
+        # Get PoW challenge
+        challenge_response = requests.post(
+            'https://chat.deepseek.com/api/v0/chat/create_pow_challenge',
+            json={"target_path": "/api/v0/chat/completion"},
+            headers=headers,
+            timeout=10
+        )
+        
+        if challenge_response.status_code != 200:
+            logger.error(f"PoW challenge failed: {challenge_response.text}")
+            return jsonify({'error': 'Failed to get PoW challenge'}), 500
+        
+        challenge_data = challenge_response.json()['data']['biz_data']['challenge']
+        
+        # Solve PoW
+        pow_response = solve_pow_challenge(
+            challenge=challenge_data['challenge'],
+            salt=challenge_data['salt'],
+            difficulty=challenge_data['difficulty'],
+            target_path="/api/v0/chat/completion"
+        )
+        
+        headers['x-ds-pow-response'] = pow_response
+        
+        # Create session
         response = requests.post(
             'https://chat.deepseek.com/api/v0/chat/session',
             json={},
@@ -551,7 +635,7 @@ def create_chat_session():
         logger.error(f"Session creation error: {str(e)}")
         return jsonify({'error': str(e)}), 500
 
-# ============ CHAT COMPLETION WITH POW ============
+# ============ CHAT COMPLETION ============
 
 @app.route('/v1/chat/completions', methods=['POST'])
 @require_api_key
@@ -566,7 +650,7 @@ def proxy_chat():
         
         token = DeepSeekToken.query.filter_by(user_id=user.id, is_valid=True).first()
         if not token:
-            return jsonify({'error': 'No valid DeepSeek token'}), 401
+            return jsonify({'error': 'No valid DeepSeek token. Please sync tokens via Chrome Extension.'}), 401
         
         # ============ STEP 1: Get Headers ============
         headers = token.get_auth_headers()
@@ -620,7 +704,13 @@ def proxy_chat():
                 logger.error(f"Session creation failed: {session_response.text}")
                 return jsonify({'error': 'Failed to create session'}), 500
             
-            chat_session_id = session_response.json()['data']['biz_data']['chat_session']['id']
+            session_data = session_response.json()
+            chat_session_id = session_data.get('data', {}).get('biz_data', {}).get('chat_session', {}).get('id')
+            
+            if not chat_session_id:
+                logger.error(f"No session ID in response: {session_data}")
+                return jsonify({'error': 'Failed to get session ID'}), 500
+            
             logger.info(f"Session created: {chat_session_id}")
         
         # ============ STEP 6: Send Chat Message ============
@@ -632,14 +722,19 @@ def proxy_chat():
         
         payload = {
             "chat_session_id": chat_session_id,
-            "prompt": prompt,
+            "parent_message_id": data.get('parent_message_id'),
             "model_type": data.get('model_type', 'default'),
+            "prompt": prompt,
+            "ref_file_ids": data.get('ref_file_ids', []),
             "thinking_enabled": data.get('thinking_enabled', False),
             "search_enabled": data.get('search_enabled', False),
+            "action": data.get('action'),
             "preempt": data.get('preempt', False)
         }
         
-        logger.info(f"Sending chat message to DeepSeek: {payload}")
+        payload = {k: v for k, v in payload.items() if v is not None}
+        
+        logger.info(f"Forwarding to DeepSeek: {payload}")
         
         response = requests.post(
             'https://chat.deepseek.com/api/v0/chat/completion',
@@ -668,6 +763,18 @@ def proxy_chat():
         
     except Exception as e:
         logger.error(f"Chat error: {str(e)}")
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/v1/chat/completions/stream', methods=['POST'])
+@require_api_key
+def proxy_chat_stream():
+    try:
+        data = request.get_json()
+        data['stream'] = True
+        return proxy_chat()
+        
+    except Exception as e:
+        logger.error(f"Stream error: {str(e)}")
         return jsonify({'error': str(e)}), 500
 
 # ============ LOGS ============
