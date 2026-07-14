@@ -3,12 +3,15 @@
 <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>SEP X · Cyberpunk Gateway</title>
+    <title>SEP X · Automation Gateway</title>
 
     <link href="https://fonts.googleapis.com/css2?family=Orbitron:wght@400;500;600;700;800;900&family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet" />
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.0/css/all.min.css" />
 
     <style>
+        /* ====================================================
+                   CYBERPUNK RESET & BASE
+                ==================================================== */
         * {
             margin: 0;
             padding: 0;
@@ -196,6 +199,7 @@
             font-weight: 400;
             color: var(--ash-dark);
             letter-spacing: 2px;
+            text-transform: uppercase;
         }
 
         .header-actions {
@@ -560,6 +564,10 @@
             color: #ff4444;
         }
 
+        .cyber-table .badge-pending {
+            color: #ffaa00;
+        }
+
         .cyber-table .actions-cell {
             display: flex;
             gap: 6px;
@@ -687,6 +695,9 @@
         }
         .log-item .log-status.err {
             color: #ff4444;
+        }
+        .log-item .log-status.pending {
+            color: #ffaa00;
         }
 
         .log-item .log-endpoint {
@@ -830,6 +841,72 @@
         .cyber-table tbody tr:hover {
             background: rgba(212, 255, 0, 0.02);
         }
+
+        /* Job status specific styles */
+        .job-status {
+            display: inline-flex;
+            align-items: center;
+            gap: 6px;
+            padding: 2px 10px;
+            border-radius: 12px;
+            font-size: 11px;
+            font-weight: 600;
+            font-family: var(--font-cyber);
+            letter-spacing: 0.3px;
+        }
+
+        .job-status.pending {
+            background: rgba(255, 170, 0, 0.1);
+            color: #ffaa00;
+        }
+
+        .job-status.processing {
+            background: rgba(96, 165, 250, 0.1);
+            color: #60a5fa;
+            animation: pulse 1.5s infinite;
+        }
+
+        .job-status.completed {
+            background: rgba(52, 211, 153, 0.1);
+            color: #34d399;
+        }
+
+        .job-status.failed {
+            background: rgba(255, 68, 68, 0.1);
+            color: #ff4444;
+        }
+
+        @keyframes pulse {
+            0%, 100% { opacity: 1; }
+            50% { opacity: 0.5; }
+        }
+
+        /* Automation status indicator */
+        .automation-status {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            padding: 4px 12px;
+            border-radius: 20px;
+            font-size: 11px;
+            font-family: var(--font-cyber);
+            letter-spacing: 0.5px;
+        }
+
+        .automation-status .dot {
+            width: 6px;
+            height: 6px;
+            border-radius: 50%;
+        }
+
+        .automation-status .dot.online {
+            background: var(--chartreuse);
+            box-shadow: 0 0 12px rgba(212, 255, 0, 0.3);
+        }
+
+        .automation-status .dot.offline {
+            background: #ff4444;
+        }
     </style>
 </head>
 <body>
@@ -842,7 +919,7 @@
                     <div class="logo-icon">⚡</div>
                     <div class="logo-text">
                         SEP <span>X</span>
-                        <div class="sub">// API GATEWAY</div>
+                        <div class="sub">// AUTOMATION GATEWAY</div>
                     </div>
                 </div>
                 <div class="header-actions">
@@ -850,6 +927,10 @@
                         <span class="dot offline" id="statusDot"></span>
                         <span id="statusLabel">DISCONNECTED</span>
                     </div>
+                    <span class="automation-status" id="automationStatus">
+                        <span class="dot offline" id="autoDot"></span>
+                        <span id="autoLabel" style="color:#666;">AUTO: OFF</span>
+                    </span>
                     <button class="btn-outline-cyber" onclick="checkStatus()">
                         <i class="fas fa-sync-alt"></i> SYNC
                     </button>
@@ -858,12 +939,13 @@
 
             <div class="main-grid">
 
+                <!-- ===== LEFT: CONNECTION ===== -->
                 <div class="cyber-card">
                     <div class="card-title">
                         <i class="fas fa-plug" style="color:var(--chartreuse);opacity:0.6;margin-right:8px;"></i>
                         Connection
                     </div>
-                    <div class="card-sub"><i class="fas fa-cube"></i> Tokens synced via Chrome Extension</div>
+                    <div class="card-sub"><i class="fas fa-cube"></i> Browser automation via Chrome Extension</div>
 
                     <div class="connection-status-box">
                         <div class="status-grid">
@@ -886,6 +968,9 @@
                         <button class="btn-cyber" onclick="checkStatus()">
                             <i class="fas fa-sync-alt"></i> REFRESH
                         </button>
+                        <button class="btn-cyber" onclick="checkDeepSeekTab()">
+                            <i class="fas fa-window-maximize"></i> CHECK DEEPSEEK
+                        </button>
                         <button class="btn-cyber danger" onclick="clearTokens()">
                             <i class="fas fa-trash-alt"></i> CLEAR
                         </button>
@@ -894,6 +979,7 @@
                     <div id="statusMsg" class="msg"></div>
                 </div>
 
+                <!-- ===== RIGHT: API KEYS ===== -->
                 <div class="cyber-card">
                     <div class="card-title">
                         <i class="fas fa-key" style="color:var(--chartreuse);opacity:0.6;margin-right:8px;"></i>
@@ -937,6 +1023,21 @@
                 </div>
             </div>
 
+            <!-- ========== JOBS SECTION ========== -->
+            <div class="logs-section" id="jobsSection">
+                <div class="log-header">
+                    <h3><i class="fas fa-tasks" style="margin-right:8px;color:var(--chartreuse);opacity:0.3;"></i>Active Jobs</h3>
+                    <span class="log-count" id="jobCount">0 JOBS</span>
+                </div>
+                <div class="log-list" id="jobList">
+                    <div style="padding:20px;text-align:center;color:var(--ash-dark);font-size:12px;font-family:var(--font-cyber);letter-spacing:0.5px;">
+                        <i class="fas fa-inbox" style="display:block;font-size:24px;margin-bottom:8px;opacity:0.2;color:var(--chartreuse);"></i>
+                        NO ACTIVE JOBS
+                    </div>
+                </div>
+            </div>
+
+            <!-- ========== LOGS ========== -->
             <div class="logs-section">
                 <div class="log-header">
                     <h3><i class="fas fa-history" style="margin-right:8px;color:var(--chartreuse);opacity:0.3;"></i>Activity Logs</h3>
@@ -950,8 +1051,9 @@
                 </div>
             </div>
 
+            <!-- ========== FOOTER ========== -->
             <div class="cyber-footer">
-                <span class="version">v2.0.0 // CYBERPUNK EDITION</span>
+                <span class="version">v3.0.0 // AUTOMATION EDITION</span>
                 <span class="status-text">
                     <span class="live-dot"></span>
                     <span>SYSTEM ACTIVE</span>
@@ -963,9 +1065,9 @@
 
     <script>
         // ============================================================
-        // CONFIGURATION - MATCHES EXTENSION USER ID
+        // CONFIGURATION
         // ============================================================
-        const USER_ID = 'admin';  // Changed from 'default' to match extension
+        const USER_ID = 'admin';
         let tokenValid = false;
 
         const $ = id => document.getElementById(id);
@@ -978,6 +1080,10 @@
         const apiKeysBody = $('apiKeysBody');
         const logList = $('logList');
         const logCount = $('logCount');
+        const jobList = $('jobList');
+        const jobCount = $('jobCount');
+        const autoDot = $('autoDot');
+        const autoLabel = $('autoLabel');
 
         // ============================================================
         // ENSURE USER EXISTS
@@ -999,25 +1105,66 @@
         }
 
         // ============================================================
+        // CHECK DEEPSEEK TAB
+        // ============================================================
+        async function checkDeepSeekTab() {
+            showStatus('🔍 Checking for DeepSeek tab...', 'info');
+            
+            try {
+                // Check if extension is installed by trying to ping it
+                const res = await fetch('/api/extension/job', {
+                    method: 'GET',
+                    headers: { 'Content-Type': 'application/json' }
+                });
+                
+                if (res.ok) {
+                    const data = await res.json();
+                    if (data.has_job !== undefined) {
+                        autoDot.className = 'dot online';
+                        autoLabel.textContent = 'AUTO: ON';
+                        autoLabel.style.color = 'var(--chartreuse)';
+                        showStatus('✅ Automation active! Extension is connected.', 'success');
+                    } else {
+                        autoDot.className = 'dot offline';
+                        autoLabel.textContent = 'AUTO: OFF';
+                        autoLabel.style.color = '#666';
+                        showStatus('⚠️ Extension not responding. Make sure SEP X extension is installed.', 'error');
+                    }
+                } else {
+                    autoDot.className = 'dot offline';
+                    autoLabel.textContent = 'AUTO: OFF';
+                    autoLabel.style.color = '#666';
+                    showStatus('⚠️ Extension not reachable. Make sure SEP X extension is installed and DeepSeek tab is open.', 'error');
+                }
+            } catch (error) {
+                console.error('❌ Check DeepSeek tab error:', error);
+                autoDot.className = 'dot offline';
+                autoLabel.textContent = 'AUTO: OFF';
+                autoLabel.style.color = '#666';
+                showStatus('❌ Extension not found. Please install SEP X extension.', 'error');
+            }
+        }
+
+        // ============================================================
         // INIT
         // ============================================================
         document.addEventListener('DOMContentLoaded', async () => {
             tokenUser.textContent = USER_ID.toUpperCase();
             
-            // Ensure user exists before checking status
             await ensureUser();
             
-            // Initial status check
             await checkStatus();
             await loadAPIKeys();
             await loadLogs();
+            await loadJobs();
+            await checkDeepSeekTab();
 
-            // Auto-refresh every 10 seconds to catch token updates
             setInterval(async () => {
                 if (document.visibilityState === 'visible') {
                     await checkStatus();
                     await loadAPIKeys();
                     await loadLogs();
+                    await loadJobs();
                 }
             }, 10000);
         });
@@ -1087,6 +1234,43 @@
                 }
             } catch (error) {
                 showStatus('ERROR: ' + error.message, 'error');
+            }
+        }
+
+        // ============================================================
+        // LOAD JOBS
+        // ============================================================
+        async function loadJobs() {
+            try {
+                const res = await fetch(`/api/jobs?user_id=${USER_ID}&limit=10`);
+                const jobs = await res.json();
+                console.log('📊 Jobs:', jobs);
+
+                if (jobs.length === 0) {
+                    jobList.innerHTML = `
+                                <div style="padding:20px;text-align:center;color:var(--ash-dark);font-size:12px;font-family:var(--font-cyber);letter-spacing:0.5px;">
+                                    <i class="fas fa-inbox" style="display:block;font-size:24px;margin-bottom:8px;opacity:0.2;color:var(--chartreuse);"></i>
+                                    NO ACTIVE JOBS
+                                </div>
+                            `;
+                    jobCount.textContent = '0 JOBS';
+                    return;
+                }
+
+                const activeJobs = jobs.filter(j => j.status === 'pending' || j.status === 'processing');
+                jobCount.textContent = activeJobs.length + ' JOBS';
+
+                jobList.innerHTML = jobs.map(job => `
+                            <div class="log-item">
+                                <span class="log-time">${new Date(job.created_at).toLocaleString()}</span>
+                                <span class="job-status ${job.status}">${job.status.toUpperCase()}</span>
+                                <span class="log-endpoint">${job.prompt ? job.prompt.substring(0, 50) + (job.prompt.length > 50 ? '...' : '') : 'No prompt'}</span>
+                                <span class="log-key">ID: ${job.job_id.substring(0, 8)}</span>
+                            </div>
+                        `).join('');
+
+            } catch (err) {
+                console.error('❌ Load jobs error:', err);
             }
         }
 
@@ -1268,6 +1452,15 @@
                 setTimeout(() => { el.className = 'msg'; }, 5000);
             }
         }
+
+        // ============================================================
+        // REFRESH JOBS ON INTERVAL
+        // ============================================================
+        setInterval(() => {
+            if (document.visibilityState === 'visible') {
+                loadJobs();
+            }
+        }, 15000);
     </script>
 
 </body>
