@@ -190,16 +190,19 @@ class ChatJob(db.Model):
     id = db.Column(db.Integer, primary_key=True)
     job_id = db.Column(db.String(64), unique=True, nullable=False)
     user_id = db.Column(db.Integer, db.ForeignKey('users.id'), nullable=False)
-    api_key_id = db.Column(db.Integer, db.ForeignKey('api_keys.id'))
+    api_key_id = db.Column(db.Integer, db.ForeignKey('api_keys.id'), nullable=True)
     
     prompt = db.Column(db.Text)
     session_id = db.Column(db.String(100))
-    status = db.Column(db.String(20), default='pending')  # pending, processing, completed, failed, timeout
+    status = db.Column(db.String(20), default='pending')
     response = db.Column(db.Text)
     error_message = db.Column(db.Text)
+    retry_count = db.Column(db.Integer, default=0)
+    max_retries = db.Column(db.Integer, default=3)
     
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
     updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+    started_at = db.Column(db.DateTime)
     completed_at = db.Column(db.DateTime)
     
     user = db.relationship('User', backref=db.backref('chat_jobs', lazy=True))
@@ -213,7 +216,9 @@ class ChatJob(db.Model):
             'status': self.status,
             'response': self.response,
             'error_message': self.error_message,
+            'retry_count': self.retry_count,
             'created_at': self.created_at.isoformat() if self.created_at else None,
+            'started_at': self.started_at.isoformat() if self.started_at else None,
             'completed_at': self.completed_at.isoformat() if self.completed_at else None
         }
 
@@ -262,7 +267,7 @@ def index():
             return f.read()
     except FileNotFoundError:
         return jsonify({
-            'service': 'SEP X - DeepSeek API Gateway',
+            'service': 'SEP X - DeepSeek Automation Gateway',
             'status': 'running',
             'version': '3.0.0',
             'message': 'Dashboard not found',
@@ -277,8 +282,11 @@ def index():
                 'DELETE /api/keys/<id>': 'Revoke API key',
                 'POST /api/keys/<id>/regenerate': 'Regenerate API key',
                 'POST /v1/chat/completions': 'Send chat message (requires X-API-Key)',
+                'POST /v1/chat/completions/stream': 'Stream chat response (requires X-API-Key)',
                 'GET /api/job/<job_id>': 'Check job status',
+                'GET /api/jobs': 'List jobs for user',
                 'POST /api/extension/sync': 'Extension sync endpoint',
+                'GET /api/extension/job': 'Extension poll for pending jobs',
                 'GET /api/logs': 'View API logs'
             }
         }), 200
@@ -470,6 +478,28 @@ def clear_tokens():
         logger.error(f"Clear tokens error: {str(e)}")
         return jsonify({'error': str(e)}), 500
 
+@app.route('/api/sync/history', methods=['GET'])
+def get_sync_history():
+    try:
+        user_id = request.args.get('user_id', 'default')
+        limit = int(request.args.get('limit', 20))
+        
+        user = User.query.filter_by(user_id=user_id).first()
+        if not user:
+            return jsonify([]), 200
+        
+        history = SyncHistory.query.filter_by(
+            user_id=user.id
+        ).order_by(
+            SyncHistory.created_at.desc()
+        ).limit(limit).all()
+        
+        return jsonify([h.to_dict() for h in history]), 200
+        
+    except Exception as e:
+        logger.error(f"Sync history error: {str(e)}")
+        return jsonify({'error': str(e)}), 500
+
 # ============ API KEY MANAGEMENT ============
 
 @app.route('/api/keys', methods=['POST'])
@@ -556,7 +586,10 @@ def regenerate_api_key(key_id):
         'message': 'API key regenerated'
     }), 200
 
-# ============ CHAT COMPLETION (New Browser Automation Approach) ============
+# ============ CHAT COMPLETION (Browser Automation) ============
+
+# Global job results (in-memory cache)
+job_results = {}
 
 @app.route('/v1/chat/completions', methods=['POST'])
 @require_api_key
@@ -568,6 +601,7 @@ def chat_completions():
         session_id = data.get('session_id') or str(uuid.uuid4())
         timeout = data.get('timeout', 120)
         clear_previous = data.get('clear_previous', False)
+        stream = data.get('stream', False)
         
         if not prompt:
             return jsonify({'error': 'prompt or message required'}), 400
@@ -594,7 +628,17 @@ def chat_completions():
         
         logger.info(f"Chat job created: {job_id} for user {user.user_id}")
         
-        # Wait for extension to process
+        # If streaming, return job ID immediately
+        if stream:
+            return jsonify({
+                'success': True,
+                'job_id': job_id,
+                'session_id': session_id,
+                'status': 'pending',
+                'message': 'Job created. Check /api/job/' + job_id + ' for status'
+            }), 202
+        
+        # Wait for response (polling)
         start_time = time.time()
         check_interval = 1
         max_checks = timeout
@@ -605,6 +649,20 @@ def chat_completions():
             
             if job.status == 'completed':
                 logger.info(f"Job {job_id} completed successfully")
+                
+                # Log API request
+                log = APILog(
+                    api_key_id=request.api_key.id,
+                    endpoint='/v1/chat/completions',
+                    method='POST',
+                    status_code=200,
+                    response_time=time.time() - start_time,
+                    ip_address=request.remote_addr,
+                    user_agent=request.headers.get('User-Agent', '')
+                )
+                db.session.add(log)
+                db.session.commit()
+                
                 return jsonify({
                     'success': True,
                     'response': job.response,
@@ -630,7 +688,7 @@ def chat_completions():
                     'status': 'timeout'
                 }), 408
             
-            # Also check for a response in the job_results dict (for extension sync)
+            # Also check in-memory cache (for faster response)
             if job_id in job_results:
                 result = job_results.pop(job_id)
                 if result.get('success'):
@@ -646,6 +704,18 @@ def chat_completions():
                         'job_id': job_id,
                         'status': 'completed'
                     }), 200
+                else:
+                    job.status = 'failed'
+                    job.error_message = result.get('error', 'Unknown error')
+                    job.completed_at = datetime.utcnow()
+                    db.session.commit()
+                    
+                    return jsonify({
+                        'success': False,
+                        'error': job.error_message,
+                        'job_id': job_id,
+                        'status': 'failed'
+                    }), 500
             
             time.sleep(check_interval)
         
@@ -665,7 +735,92 @@ def chat_completions():
         logger.error(f"Chat error: {str(e)}")
         return jsonify({'error': str(e)}), 500
 
-# ============ JOB STATUS ============
+@app.route('/v1/chat/completions/stream', methods=['POST'])
+@require_api_key
+def chat_completions_stream():
+    """Stream chat response from browser automation"""
+    try:
+        data = request.get_json()
+        prompt = data.get('prompt') or data.get('message')
+        session_id = data.get('session_id') or str(uuid.uuid4())
+        
+        if not prompt:
+            return jsonify({'error': 'prompt or message required'}), 400
+        
+        user = User.query.get(request.api_key.user_id)
+        if not user:
+            return jsonify({'error': 'User not found'}), 404
+        
+        # Create job
+        job_id = str(uuid.uuid4())
+        
+        job = ChatJob(
+            job_id=job_id,
+            user_id=user.id,
+            api_key_id=request.api_key.id,
+            prompt=prompt,
+            session_id=session_id,
+            status='pending',
+            created_at=datetime.utcnow()
+        )
+        db.session.add(job)
+        db.session.commit()
+        
+        def generate():
+            start_time = time.time()
+            timeout = 120
+            
+            yield f"data: {json.dumps({'job_id': job_id, 'session_id': session_id, 'status': 'pending'})}\n\n"
+            
+            while time.time() - start_time < timeout:
+                db.session.refresh(job)
+                
+                if job.status == 'completed':
+                    yield f"data: {json.dumps({'job_id': job_id, 'response': job.response, 'status': 'completed'})}\n\n"
+                    yield "event: close\ndata: {}\n\n"
+                    return
+                
+                elif job.status == 'failed':
+                    yield f"data: {json.dumps({'job_id': job_id, 'error': job.error_message, 'status': 'failed'})}\n\n"
+                    return
+                
+                elif job.status == 'timeout':
+                    yield f"data: {json.dumps({'job_id': job_id, 'error': 'Timeout', 'status': 'timeout'})}\n\n"
+                    return
+                
+                # Check in-memory cache
+                if job_id in job_results:
+                    result = job_results.pop(job_id)
+                    if result.get('success'):
+                        job.status = 'completed'
+                        job.response = result.get('response')
+                        job.completed_at = datetime.utcnow()
+                        db.session.commit()
+                        
+                        yield f"data: {json.dumps({'job_id': job_id, 'response': job.response, 'status': 'completed'})}\n\n"
+                        yield "event: close\ndata: {}\n\n"
+                        return
+                    else:
+                        job.status = 'failed'
+                        job.error_message = result.get('error', 'Unknown error')
+                        job.completed_at = datetime.utcnow()
+                        db.session.commit()
+                        
+                        yield f"data: {json.dumps({'job_id': job_id, 'error': job.error_message, 'status': 'failed'})}\n\n"
+                        return
+                
+                yield f"data: {json.dumps({'job_id': job_id, 'status': 'processing', 'waiting': True})}\n\n"
+                time.sleep(1)
+            
+            yield f"data: {json.dumps({'job_id': job_id, 'error': 'Timeout', 'status': 'timeout'})}\n\n"
+        
+        return Response(generate(), mimetype='text/event-stream')
+        
+    except Exception as e:
+        logger.error(f"Stream chat error: {str(e)}")
+        return jsonify({'error': str(e)}), 500
+
+# ============ JOB MANAGEMENT ============
 
 @app.route('/api/job/<job_id>', methods=['GET'])
 def get_job_status(job_id):
@@ -681,10 +836,55 @@ def get_job_status(job_id):
         logger.error(f"Job status error: {str(e)}")
         return jsonify({'error': str(e)}), 500
 
-# ============ EXTENSION SYNC ============
+@app.route('/api/jobs', methods=['GET'])
+def get_jobs():
+    """Get jobs for a user"""
+    try:
+        user_id = request.args.get('user_id', 'default')
+        limit = int(request.args.get('limit', 20))
+        status_filter = request.args.get('status')
+        
+        user = User.query.filter_by(user_id=user_id).first()
+        if not user:
+            return jsonify([]), 200
+        
+        query = ChatJob.query.filter_by(user_id=user.id)
+        
+        if status_filter:
+            query = query.filter_by(status=status_filter)
+        
+        jobs = query.order_by(
+            ChatJob.created_at.desc()
+        ).limit(limit).all()
+        
+        return jsonify([j.to_dict() for j in jobs]), 200
+        
+    except Exception as e:
+        logger.error(f"Get jobs error: {str(e)}")
+        return jsonify({'error': str(e)}), 500
 
-# Global job results (in-memory cache, for quick access)
-job_results = {}
+@app.route('/api/jobs/<job_id>', methods=['DELETE'])
+def delete_job(job_id):
+    """Delete a job"""
+    try:
+        job = ChatJob.query.filter_by(job_id=job_id).first()
+        if not job:
+            return jsonify({'error': 'Job not found'}), 404
+        
+        # Only allow deletion if completed or failed
+        if job.status in ['pending', 'processing']:
+            return jsonify({'error': 'Cannot delete active job'}), 400
+        
+        db.session.delete(job)
+        db.session.commit()
+        
+        return jsonify({'success': True, 'message': 'Job deleted'}), 200
+        
+    except Exception as e:
+        logger.error(f"Delete job error: {str(e)}")
+        return jsonify({'error': str(e)}), 500
+
+# ============ EXTENSION SYNC ============
 
 @app.route('/api/extension/sync', methods=['POST'])
 def extension_sync():
@@ -707,6 +907,7 @@ def extension_sync():
             if error:
                 job.status = 'failed'
                 job.error_message = error
+                job.completed_at = datetime.utcnow()
             else:
                 job.status = 'completed'
                 job.response = response
@@ -715,7 +916,7 @@ def extension_sync():
             db.session.commit()
             logger.info(f"Job {job_id} updated in database: {job.status}")
         
-        # Also store in memory for quick access
+        # Store in memory for quick access
         job_results[job_id] = {
             'success': not bool(error),
             'response': response,
@@ -733,13 +934,11 @@ def extension_sync():
         logger.error(f"Extension sync error: {str(e)}")
         return jsonify({'error': str(e)}), 500
 
-# ============ EXTENSION GET JOB ============
-
 @app.route('/api/extension/job', methods=['GET'])
 def extension_get_job():
     """Extension polls for pending jobs"""
     try:
-        # Get pending jobs (older than 5 seconds to avoid race conditions)
+        # Get pending jobs (older than 3 seconds to avoid race conditions)
         pending_jobs = ChatJob.query.filter_by(
             status='pending'
         ).order_by(
@@ -750,6 +949,13 @@ def extension_get_job():
             return jsonify({'has_job': False}), 200
         
         job = pending_jobs[0]
+        
+        # Mark as processing
+        job.status = 'processing'
+        job.started_at = datetime.utcnow()
+        db.session.commit()
+        
+        logger.info(f"Extension picked up job: {job.job_id}")
         
         return jsonify({
             'has_job': True,
