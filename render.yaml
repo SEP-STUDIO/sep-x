@@ -1,20 +1,22 @@
 services:
   - type: web
-    name: sep-x-api
-    env: python
-    buildCommand: pip install -r requirements.txt
-    startCommand: gunicorn app:app
+    name: sep-x
+    runtime: python
+    plan: starter
+    buildCommand: |
+      pip install -r requirements.txt
+    startCommand: gunicorn app:app --timeout 300 --workers 2 --threads 4
     envVars:
-      - key: FLASK_ENV
-        value: production
-      - key: SECRET_KEY
-        generateValue: true
+      - key: PYTHON_VERSION
+        value: 3.11.0
       - key: DATABASE_URL
         fromDatabase:
           name: sep-x-db
           property: connectionString
-    databases:
-      - name: sep-x-db
-        databaseName: sep_x
-        user: sep_x_user
-    plan: free
+      - key: REDIS_URL
+        fromService:
+          name: sep-x-redis
+          type: redis
+          property: connectionString
+    healthCheckPath: /health
+    autoDeploy: true
