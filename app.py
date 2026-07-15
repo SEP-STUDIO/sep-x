@@ -15,6 +15,8 @@ import threading
 from functools import wraps
 from dotenv import load_dotenv
 from bs4 import BeautifulSoup
+import redis
+from urllib.parse import urlparse
 
 load_dotenv()
 
@@ -39,6 +41,133 @@ logging.basicConfig(
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
 )
 logger = logging.getLogger(__name__)
+
+# ============ REDIS SETUP ============
+REDIS_URL = os.getenv('REDIS_URL', 'redis://localhost:6379')
+redis_client = None
+redis_available = False
+
+def init_redis():
+    """Initialize Redis connection"""
+    global redis_client, redis_available
+    try:
+        if REDIS_URL:
+            # Parse Redis URL
+            parsed = urlparse(REDIS_URL)
+            if parsed.scheme in ['redis', 'rediss']:
+                redis_client = redis.from_url(REDIS_URL, decode_responses=True)
+                redis_client.ping()
+                redis_available = True
+                logger.info(f"✅ Redis connected successfully to {REDIS_URL}")
+            else:
+                logger.warning(f"⚠️ Invalid Redis URL scheme: {parsed.scheme}")
+        else:
+            logger.warning("⚠️ No REDIS_URL environment variable set")
+    except Exception as e:
+        logger.warning(f"⚠️ Redis connection failed: {e}. Using in-memory fallback.")
+        redis_client = None
+        redis_available = False
+
+# Initialize Redis on startup
+init_redis()
+
+# ============ REDIS HELPER FUNCTIONS ============
+
+def store_job_result(job_id, data, expiry=300):
+    """Store job result in Redis or memory"""
+    try:
+        if redis_available and redis_client:
+            redis_client.setex(
+                f'job_result:{job_id}',
+                expiry,
+                json.dumps(data)
+            )
+            return True
+    except Exception as e:
+        logger.warning(f"Redis store error: {e}")
+    
+    # Fallback to memory
+    with job_lock:
+        job_results[job_id] = data
+    return True
+
+def get_job_result(job_id):
+    """Get job result from Redis or memory"""
+    try:
+        if redis_available and redis_client:
+            data = redis_client.get(f'job_result:{job_id}')
+            if data:
+                return json.loads(data)
+    except Exception as e:
+        logger.warning(f"Redis get error: {e}")
+    
+    # Fallback to memory
+    with job_lock:
+        return job_results.get(job_id)
+
+def delete_job_result(job_id):
+    """Delete job result from Redis or memory"""
+    try:
+        if redis_available and redis_client:
+            redis_client.delete(f'job_result:{job_id}')
+    except Exception as e:
+        logger.warning(f"Redis delete error: {e}")
+    
+    # Fallback to memory
+    with job_lock:
+        job_results.pop(job_id, None)
+
+def store_session_token(user_id, token_data, expiry=604800):  # 7 days
+    """Store session token in Redis"""
+    try:
+        if redis_available and redis_client:
+            redis_client.setex(
+                f'session:{user_id}',
+                expiry,
+                json.dumps(token_data)
+            )
+            return True
+    except Exception as e:
+        logger.warning(f"Redis session store error: {e}")
+    return False
+
+def get_session_token(user_id):
+    """Get session token from Redis"""
+    try:
+        if redis_available and redis_client:
+            data = redis_client.get(f'session:{user_id}')
+            if data:
+                return json.loads(data)
+    except Exception as e:
+        logger.warning(f"Redis session get error: {e}")
+    return None
+
+def delete_session_token(user_id):
+    """Delete session token from Redis"""
+    try:
+        if redis_available and redis_client:
+            redis_client.delete(f'session:{user_id}')
+    except Exception as e:
+        logger.warning(f"Redis session delete error: {e}")
+
+def publish_job_update(job_id, data):
+    """Publish job update to Redis channel for real-time notifications"""
+    try:
+        if redis_available and redis_client:
+            redis_client.publish(
+                f'job_updates:{job_id}',
+                json.dumps(data)
+            )
+            return True
+    except Exception as e:
+        logger.warning(f"Redis publish error: {e}")
+    return False
+
+def subscribe_to_job_updates(job_id, callback):
+    """Subscribe to job updates (for WebSocket/SSE)"""
+    # This would use Redis pub/sub in a separate thread
+    # For simplicity, we'll use the in-memory approach
+    pass
 
 # ============ MODELS ============
 
@@ -228,8 +357,9 @@ with app.app_context():
     logger.info("Database tables created")
 
 # ============ GLOBAL STORAGE ============
-# In-memory job results (for quick access)
+# In-memory job results (fallback when Redis is not available)
 job_results = {}
+job_lock = threading.Lock()
 # Active WebSocket connections
 active_connections = {}
 
@@ -277,6 +407,7 @@ def index():
             'service': 'SEP X - DeepSeek API Gateway',
             'status': 'running',
             'version': '3.0.0',
+            'redis_available': redis_available,
             'message': 'Dashboard not found',
             'endpoints': {
                 'POST /v1/chat/completions': 'Create chat job (non-blocking)',
@@ -297,11 +428,23 @@ def index():
 
 @app.route('/health')
 def health():
+    redis_status = 'connected' if redis_available else 'disabled'
     return jsonify({
         'status': 'healthy',
         'timestamp': datetime.utcnow().isoformat(),
         'database': 'connected',
+        'redis': redis_status,
         'version': '3.0.0'
+    })
+
+@app.route('/api/status')
+def api_status():
+    """Get system status including Redis"""
+    return jsonify({
+        'redis_available': redis_available,
+        'redis_url': REDIS_URL if REDIS_URL else 'not configured',
+        'job_results_count': len(job_results),
+        'timestamp': datetime.utcnow().isoformat()
     })
 
 # ============ USER CREATION ============
@@ -402,6 +545,13 @@ def sync_tokens():
         db.session.add(token)
         db.session.commit()
 
+        # Store in Redis for fast access
+        store_session_token(user_id, {
+            'access_token': access_token,
+            'expires_at': token.expires_at.isoformat(),
+            'source': source
+        })
+
         logger.info(f"Tokens synced successfully for user {user_id}")
 
         return jsonify({
@@ -410,7 +560,8 @@ def sync_tokens():
             'expires_at': token.expires_at.isoformat(),
             'user_id': user_id,
             'source': source,
-            'token_preview': access_token[:20] + '...'
+            'token_preview': access_token[:20] + '...',
+            'redis_cached': redis_available
         }), 200
 
     except Exception as e:
@@ -454,7 +605,8 @@ def token_status():
             'expires_at': token.expires_at.isoformat() if token.expires_at else None,
             'expires_in_days': max(0, days_left),
             'extracted_at': token.created_at.isoformat(),
-            'source': token.source
+            'source': token.source,
+            'redis_cached': redis_available
         }), 200
 
     except Exception as e:
@@ -471,6 +623,7 @@ def clear_tokens():
         if user:
             DeepSeekToken.query.filter_by(user_id=user.id).delete()
             db.session.commit()
+            delete_session_token(user_id)
             logger.info(f"Tokens cleared for user {user_id}")
 
         return jsonify({
@@ -605,6 +758,15 @@ def chat_completions():
         db.session.add(job)
         db.session.commit()
 
+        # Store in Redis for fast access
+        store_job_result(job_id, {
+            'status': 'pending',
+            'session_id': session_id,
+            'user_id': user.user_id,
+            'prompt': prompt[:100],
+            'created_at': datetime.utcnow().isoformat()
+        })
+
         logger.info(f"Chat job created: {job_id} for user {user.user_id}")
 
         # Return job ID immediately - client can poll or use WebSocket
@@ -627,7 +789,7 @@ def chat_completions():
 @app.route('/v1/chat/completions/stream', methods=['POST'])
 @require_api_key
 def chat_completions_stream():
-    """Stream chat response using Server-Sent Events (SSE). Keeps connection alive."""
+    """Stream chat response using Server-Sent Events (SSE)."""
     try:
         data = request.get_json()
         prompt = data.get('prompt') or data.get('message')
@@ -658,80 +820,96 @@ def chat_completions_stream():
         db.session.add(job)
         db.session.commit()
 
+        # Store in Redis for fast access
+        store_job_result(job_id, {
+            'status': 'pending',
+            'session_id': session_id,
+            'user_id': user.user_id,
+            'prompt': prompt[:100],
+            'created_at': datetime.utcnow().isoformat()
+        })
+
         logger.info(f"Stream job created: {job_id} for user {user.user_id}")
 
         # Server-Sent Events generator
         def generate():
             start_time = time.time()
-            last_update = None
-            check_interval = 0.5  # Check every 500ms for faster response
+            last_sent_progress = 0
+            check_count = 0
+            last_heartbeat = 0
             
             # Send initial event
             yield f"data: {json.dumps({'type': 'start', 'job_id': job_id, 'session_id': session_id, 'message': 'Job created, waiting for extension...'})}\n\n"
             
-            # Flush the response to ensure client receives it
-            import sys
-            sys.stdout.flush()
-            
             while time.time() - start_time < timeout:
-                # Refresh job from database
-                db.session.refresh(job)
+                check_count += 1
                 
-                # Check if job is completed
-                if job.status == 'completed':
-                    yield f"data: {json.dumps({'type': 'complete', 'response': job.response, 'job_id': job_id, 'session_id': session_id, 'elapsed': int(time.time() - start_time)})}\n\n"
-                    yield "data: [DONE]\n\n"
-                    return
+                # Check Redis/memory for job status
+                result = get_job_result(job_id)
                 
-                # Check if job failed
-                elif job.status == 'failed':
-                    yield f"data: {json.dumps({'type': 'error', 'error': job.error_message or 'Job failed', 'job_id': job_id, 'elapsed': int(time.time() - start_time)})}\n\n"
-                    return
-                
-                # Check if job timed out
-                elif job.status == 'timeout':
-                    yield f"data: {json.dumps({'type': 'error', 'error': 'Job timed out', 'job_id': job_id, 'elapsed': int(time.time() - start_time)})}\n\n"
-                    return
-                
-                # Check memory cache (faster than DB polling)
-                if job_id in job_results:
-                    result = job_results.pop(job_id)
-                    if result.get('success'):
-                        # Update job in database
-                        job.status = 'completed'
-                        job.response = result.get('response')
-                        job.completed_at = datetime.utcnow()
-                        db.session.commit()
-                        
-                        yield f"data: {json.dumps({'type': 'complete', 'response': job.response, 'job_id': job_id, 'session_id': session_id, 'elapsed': int(time.time() - start_time)})}\n\n"
+                if result:
+                    status = result.get('status')
+                    
+                    if status == 'completed':
+                        yield f"data: {json.dumps({'type': 'complete', 'response': result.get('response'), 'job_id': job_id, 'session_id': session_id, 'elapsed': int(time.time() - start_time)})}\n\n"
                         yield "data: [DONE]\n\n"
+                        delete_job_result(job_id)
                         return
-                    else:
-                        job.status = 'failed'
-                        job.error_message = result.get('error', 'Unknown error')
-                        db.session.commit()
-                        
-                        yield f"data: {json.dumps({'type': 'error', 'error': job.error_message, 'job_id': job_id, 'elapsed': int(time.time() - start_time)})}\n\n"
+                    elif status == 'failed':
+                        yield f"data: {json.dumps({'type': 'error', 'error': result.get('error', 'Job failed'), 'job_id': job_id, 'elapsed': int(time.time() - start_time)})}\n\n"
+                        delete_job_result(job_id)
                         return
+                    elif status == 'timeout':
+                        yield f"data: {json.dumps({'type': 'error', 'error': result.get('error', 'Job timed out'), 'job_id': job_id, 'elapsed': int(time.time() - start_time)})}\n\n"
+                        delete_job_result(job_id)
+                        return
+                
+                # Check database periodically (every 2 seconds)
+                if check_count % 4 == 0:
+                    db_job = ChatJob.query.filter_by(job_id=job_id).first()
+                    if db_job:
+                        if db_job.status == 'completed':
+                            store_job_result(job_id, {
+                                'status': 'completed',
+                                'response': db_job.response,
+                                'session_id': session_id
+                            })
+                            # Next loop iteration will pick this up
+                        elif db_job.status == 'failed':
+                            store_job_result(job_id, {
+                                'status': 'failed',
+                                'error': db_job.error_message
+                            })
+                        elif db_job.status == 'timeout':
+                            store_job_result(job_id, {
+                                'status': 'timeout',
+                                'error': 'Job timed out'
+                            })
                 
                 # Send progress updates every 5 seconds
                 elapsed = int(time.time() - start_time)
-                if elapsed > 0 and elapsed % 5 == 0 and elapsed != last_update:
-                    last_update = elapsed
+                if elapsed > 0 and elapsed % 5 == 0 and elapsed != last_sent_progress:
+                    last_sent_progress = elapsed
                     yield f"data: {json.dumps({'type': 'progress', 'elapsed': elapsed, 'status': 'waiting_for_extension', 'message': f'Waiting for extension to process... ({elapsed}s elapsed)'})}\n\n"
                 
                 # Send heartbeat every 10 seconds to keep connection alive
-                if elapsed > 0 and elapsed % 10 == 0 and elapsed != last_update:
+                if elapsed > 0 and elapsed % 10 == 0 and elapsed != last_heartbeat:
+                    last_heartbeat = elapsed
                     yield f"data: {json.dumps({'type': 'heartbeat', 'elapsed': elapsed})}\n\n"
                 
-                time.sleep(check_interval)
+                time.sleep(0.5)
             
-            # Timeout
-            job.status = 'timeout'
-            job.error_message = f'Request timed out after {timeout} seconds waiting for extension'
-            db.session.commit()
+            # Timeout - check one last time
+            final_result = get_job_result(job_id)
+            if final_result and final_result.get('status') == 'completed':
+                yield f"data: {json.dumps({'type': 'complete', 'response': final_result.get('response'), 'job_id': job_id, 'session_id': session_id, 'elapsed': int(time.time() - start_time)})}\n\n"
+                yield "data: [DONE]\n\n"
+                delete_job_result(job_id)
+                return
             
+            # Really timed out
             yield f"data: {json.dumps({'type': 'error', 'error': f'Timeout waiting for response from browser after {timeout}s', 'job_id': job_id, 'elapsed': timeout})}\n\n"
+            delete_job_result(job_id)
 
         return Response(
             stream_with_context(generate()),
@@ -758,17 +936,17 @@ def get_job_status(job_id):
         if not job:
             return jsonify({'error': 'Job not found'}), 404
 
-        # Check if job is completed in memory cache
-        if job_id in job_results and job.status == 'pending':
-            result = job_results[job_id]
-            if result.get('success'):
+        # Check if job is completed in cache
+        cached = get_job_result(job_id)
+        if cached and cached.get('status') in ['completed', 'failed', 'timeout']:
+            if cached.get('status') == 'completed':
                 job.status = 'completed'
-                job.response = result.get('response')
+                job.response = cached.get('response')
                 job.completed_at = datetime.utcnow()
                 db.session.commit()
-            elif result.get('error'):
+            elif cached.get('status') == 'failed':
                 job.status = 'failed'
-                job.error_message = result.get('error')
+                job.error_message = cached.get('error')
                 db.session.commit()
 
         return jsonify(job.to_dict()), 200
@@ -842,14 +1020,29 @@ def extension_sync():
             db.session.commit()
             logger.info(f"Job {job_id} updated in database: {job.status}")
 
-        # Store in memory for quick access
-        job_results[job_id] = {
-            'success': not bool(error),
+        # Store in Redis/memory for quick access
+        if error:
+            store_job_result(job_id, {
+                'status': 'failed',
+                'error': error,
+                'session_id': session_id,
+                'timestamp': datetime.utcnow().isoformat()
+            })
+        else:
+            store_job_result(job_id, {
+                'status': 'completed',
+                'response': response,
+                'session_id': session_id,
+                'timestamp': datetime.utcnow().isoformat()
+            })
+
+        # Publish job update for WebSocket clients
+        publish_job_update(job_id, {
+            'job_id': job_id,
+            'status': 'completed' if not error else 'failed',
             'response': response,
-            'session_id': session_id,
-            'error': error,
-            'timestamp': datetime.utcnow().isoformat()
-        }
+            'error': error
+        })
 
         # Notify WebSocket clients if connected
         if job_id in active_connections:
@@ -863,7 +1056,8 @@ def extension_sync():
         return jsonify({
             'success': True,
             'message': 'Response received',
-            'job_id': job_id
+            'job_id': job_id,
+            'cached': redis_available
         }), 200
 
     except Exception as e:
@@ -906,6 +1100,7 @@ def handle_connect():
     emit('connected', {
         'status': 'connected',
         'sid': request.sid,
+        'redis_available': redis_available,
         'timestamp': datetime.utcnow().isoformat()
     })
 
@@ -932,18 +1127,21 @@ def handle_subscribe(data):
     logger.info(f"Client {request.sid} subscribed to job {job_id}")
     
     # Check if job already has a result
-    if job_id in job_results:
-        result = job_results[job_id]
-        emit('job_update', {
-            'job_id': job_id,
-            'status': 'completed' if result.get('success') else 'failed',
-            'response': result.get('response'),
-            'error': result.get('error')
-        }, room=job_id)
+    result = get_job_result(job_id)
+    if result:
+        status = result.get('status')
+        if status in ['completed', 'failed', 'timeout']:
+            emit('job_update', {
+                'job_id': job_id,
+                'status': status,
+                'response': result.get('response'),
+                'error': result.get('error')
+            }, room=job_id)
     
     emit('subscribed', {
         'job_id': job_id,
-        'status': 'subscribed'
+        'status': 'subscribed',
+        'redis_available': redis_available
     })
 
 @socketio.on('chat_request')
@@ -968,12 +1166,12 @@ def handle_chat_request(data):
         # Create job
         job_id = str(uuid.uuid4())
         
-        # Store in memory with socket info
-        job_results[job_id] = {
+        # Store in Redis/memory
+        store_job_result(job_id, {
             'status': 'pending',
             'socket_id': request.sid,
             'session_id': session_id
-        }
+        })
         
         # Create database record
         job = ChatJob(
@@ -1003,19 +1201,26 @@ def handle_chat_request(data):
         def wait_for_result():
             start_time = time.time()
             while time.time() - start_time < timeout:
-                if job_id in job_results:
-                    result = job_results[job_id]
-                    if result.get('status') == 'completed':
+                result = get_job_result(job_id)
+                if result:
+                    status = result.get('status')
+                    if status == 'completed':
                         socketio.emit('chat_response', {
                             'job_id': job_id,
                             'response': result.get('response'),
                             'session_id': session_id
                         }, room=job_id)
                         return
-                    elif result.get('status') == 'failed':
+                    elif status == 'failed':
                         socketio.emit('error', {
                             'job_id': job_id,
                             'error': result.get('error', 'Job failed')
+                        }, room=job_id)
+                        return
+                    elif status == 'timeout':
+                        socketio.emit('error', {
+                            'job_id': job_id,
+                            'error': 'Timeout waiting for response'
                         }, room=job_id)
                         return
                 time.sleep(1)
