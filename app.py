@@ -1,6 +1,7 @@
 from flask import Flask, jsonify, request, session, Response, stream_with_context
 from flask_cors import CORS
 from flask_sqlalchemy import SQLAlchemy
+from flask_socketio import SocketIO, emit, join_room, leave_room
 from datetime import datetime, timedelta
 import secrets
 import requests
@@ -10,6 +11,7 @@ import logging
 import os
 import uuid
 import time
+import threading
 from functools import wraps
 from dotenv import load_dotenv
 from bs4 import BeautifulSoup
@@ -28,6 +30,9 @@ app.config['PERMANENT_SESSION_LIFETIME'] = timedelta(hours=24)
 db = SQLAlchemy(app)
 CORS(app, supports_credentials=True)
 
+# Initialize SocketIO for real-time communication
+socketio = SocketIO(app, cors_allowed_origins="*", async_mode='threading', ping_timeout=120, ping_interval=30)
+
 # ============ LOGGING ============
 logging.basicConfig(
     level=logging.INFO,
@@ -44,7 +49,7 @@ class User(db.Model):
     email = db.Column(db.String(200))
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
     is_active = db.Column(db.Boolean, default=True)
-    
+
     def to_dict(self):
         return {
             'id': self.id,
@@ -58,20 +63,20 @@ class DeepSeekToken(db.Model):
     __tablename__ = 'deepseek_tokens'
     id = db.Column(db.Integer, primary_key=True)
     user_id = db.Column(db.Integer, db.ForeignKey('users.id'), nullable=False)
-    
+
     access_token = db.Column(db.Text)
     refresh_token = db.Column(db.Text)
     cookies = db.Column(db.JSON)
     local_storage = db.Column(db.JSON)
-    
+
     expires_at = db.Column(db.DateTime)
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
     updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
     is_valid = db.Column(db.Boolean, default=True)
     source = db.Column(db.String(50), default='extension')
-    
+
     user = db.relationship('User', backref=db.backref('tokens', lazy=True, cascade='all, delete-orphan'))
-    
+
     def get_auth_headers(self):
         headers = {
             'Content-Type': 'application/json',
@@ -85,10 +90,10 @@ class DeepSeekToken(db.Model):
             'x-client-locale': 'en_US',
             'x-client-timezone-offset': '3600'
         }
-        
+
         if self.access_token:
             headers['Authorization'] = f'Bearer {self.access_token}'
-        
+
         if self.cookies:
             cookie_str = ''
             if isinstance(self.cookies, list):
@@ -99,9 +104,9 @@ class DeepSeekToken(db.Model):
                 cookie_str = '; '.join([f'{k}={v}' for k, v in self.cookies.items()])
             if cookie_str:
                 headers['Cookie'] = cookie_str.rstrip('; ')
-        
+
         return headers
-    
+
     def to_dict(self):
         return {
             'id': self.id,
@@ -116,21 +121,21 @@ class APIKey(db.Model):
     __tablename__ = 'api_keys'
     id = db.Column(db.Integer, primary_key=True)
     user_id = db.Column(db.Integer, db.ForeignKey('users.id'), nullable=False)
-    
+
     key = db.Column(db.String(64), unique=True, nullable=False)
     name = db.Column(db.String(100))
     description = db.Column(db.Text)
-    
+
     rate_limit = db.Column(db.Integer, default=30)
     requests_count = db.Column(db.Integer, default=0)
     last_reset = db.Column(db.DateTime, default=datetime.utcnow)
-    
+
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
     expires_at = db.Column(db.DateTime)
     is_active = db.Column(db.Boolean, default=True)
-    
+
     user = db.relationship('User', backref=db.backref('api_keys', lazy=True, cascade='all, delete-orphan'))
-    
+
     def to_dict(self):
         return {
             'id': self.id,
@@ -149,7 +154,7 @@ class APILog(db.Model):
     __tablename__ = 'api_logs'
     id = db.Column(db.Integer, primary_key=True)
     api_key_id = db.Column(db.Integer, db.ForeignKey('api_keys.id'))
-    
+
     endpoint = db.Column(db.String(100))
     method = db.Column(db.String(10))
     status_code = db.Column(db.Integer)
@@ -157,23 +162,23 @@ class APILog(db.Model):
     ip_address = db.Column(db.String(50))
     user_agent = db.Column(db.String(200))
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
-    
+
     api_key = db.relationship('APIKey', backref=db.backref('logs', lazy=True, cascade='all, delete-orphan'))
 
 class SyncHistory(db.Model):
     __tablename__ = 'sync_history'
     id = db.Column(db.Integer, primary_key=True)
     user_id = db.Column(db.Integer, db.ForeignKey('users.id'), nullable=False)
-    
+
     sync_type = db.Column(db.String(50))
     source = db.Column(db.String(100))
     status = db.Column(db.String(20))
     error_message = db.Column(db.Text)
     token_count = db.Column(db.Integer, default=0)
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
-    
+
     user = db.relationship('User', backref=db.backref('sync_history', lazy=True, cascade='all, delete-orphan'))
-    
+
     def to_dict(self):
         return {
             'id': self.id,
@@ -190,24 +195,21 @@ class ChatJob(db.Model):
     id = db.Column(db.Integer, primary_key=True)
     job_id = db.Column(db.String(64), unique=True, nullable=False)
     user_id = db.Column(db.Integer, db.ForeignKey('users.id'), nullable=False)
-    api_key_id = db.Column(db.Integer, db.ForeignKey('api_keys.id'), nullable=True)
-    
+    api_key_id = db.Column(db.Integer, db.ForeignKey('api_keys.id'))
+
     prompt = db.Column(db.Text)
     session_id = db.Column(db.String(100))
-    status = db.Column(db.String(20), default='pending')
+    status = db.Column(db.String(20), default='pending')  # pending, processing, completed, failed, timeout
     response = db.Column(db.Text)
     error_message = db.Column(db.Text)
-    retry_count = db.Column(db.Integer, default=0)
-    max_retries = db.Column(db.Integer, default=3)
-    
+
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
     updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
-    started_at = db.Column(db.DateTime)
     completed_at = db.Column(db.DateTime)
-    
+
     user = db.relationship('User', backref=db.backref('chat_jobs', lazy=True))
     api_key = db.relationship('APIKey', backref=db.backref('chat_jobs', lazy=True))
-    
+
     def to_dict(self):
         return {
             'job_id': self.job_id,
@@ -216,9 +218,7 @@ class ChatJob(db.Model):
             'status': self.status,
             'response': self.response,
             'error_message': self.error_message,
-            'retry_count': self.retry_count,
             'created_at': self.created_at.isoformat() if self.created_at else None,
-            'started_at': self.started_at.isoformat() if self.started_at else None,
             'completed_at': self.completed_at.isoformat() if self.completed_at else None
         }
 
@@ -226,6 +226,12 @@ class ChatJob(db.Model):
 with app.app_context():
     db.create_all()
     logger.info("Database tables created")
+
+# ============ GLOBAL STORAGE ============
+# In-memory job results (for quick access)
+job_results = {}
+# Active WebSocket connections
+active_connections = {}
 
 # ============ API KEY AUTH DECORATOR ============
 
@@ -235,25 +241,26 @@ def require_api_key(f):
         api_key = request.headers.get('X-API-Key')
         if not api_key:
             return jsonify({'error': 'API key required. Provide X-API-Key header'}), 401
-        
+
         key = APIKey.query.filter_by(key=api_key, is_active=True).first()
         if not key:
             return jsonify({'error': 'Invalid or inactive API key'}), 401
-        
+
         if key.expires_at and key.expires_at < datetime.utcnow():
             return jsonify({'error': 'API key expired'}), 401
-        
+
+        # Rate limiting
         if key.last_reset.date() < datetime.utcnow().date():
             key.requests_count = 0
             key.last_reset = datetime.utcnow()
             db.session.commit()
-        
+
         if key.requests_count >= key.rate_limit:
             return jsonify({'error': f'Rate limit exceeded ({key.rate_limit}/hour)'}), 429
-        
+
         key.requests_count += 1
         db.session.commit()
-        
+
         request.api_key = key
         return f(*args, **kwargs)
     return decorated
@@ -267,27 +274,24 @@ def index():
             return f.read()
     except FileNotFoundError:
         return jsonify({
-            'service': 'SEP X - DeepSeek Automation Gateway',
+            'service': 'SEP X - DeepSeek API Gateway',
             'status': 'running',
             'version': '3.0.0',
             'message': 'Dashboard not found',
             'endpoints': {
+                'POST /v1/chat/completions': 'Create chat job (non-blocking)',
+                'POST /v1/chat/completions/stream': 'Stream chat response (SSE)',
+                'GET /api/job/<job_id>': 'Check job status',
+                'POST /api/extension/sync': 'Extension sync endpoint',
+                'GET /api/extension/job': 'Extension get pending job',
                 'POST /api/tokens/sync': 'Sync tokens from Chrome Extension',
                 'GET /api/token/status': 'Check token status',
                 'POST /api/tokens/clear': 'Clear tokens',
-                'GET /api/sync/history': 'Get sync history',
                 'POST /api/user/create': 'Create user',
                 'POST /api/keys': 'Generate API key',
                 'GET /api/keys': 'List API keys',
-                'DELETE /api/keys/<id>': 'Revoke API key',
-                'POST /api/keys/<id>/regenerate': 'Regenerate API key',
-                'POST /v1/chat/completions': 'Send chat message (requires X-API-Key)',
-                'POST /v1/chat/completions/stream': 'Stream chat response (requires X-API-Key)',
-                'GET /api/job/<job_id>': 'Check job status',
-                'GET /api/jobs': 'List jobs for user',
-                'POST /api/extension/sync': 'Extension sync endpoint',
-                'GET /api/extension/job': 'Extension poll for pending jobs',
-                'GET /api/logs': 'View API logs'
+                'GET /api/logs': 'View API logs',
+                'WebSocket': '/socket.io/ for real-time communication'
             }
         }), 200
 
@@ -307,7 +311,7 @@ def create_user():
     try:
         data = request.get_json()
         user_id = data.get('user_id', 'default')
-        
+
         user = User.query.filter_by(user_id=user_id).first()
         if user:
             return jsonify({
@@ -315,7 +319,7 @@ def create_user():
                 'message': f'User {user_id} already exists',
                 'user': user.to_dict()
             }), 200
-        
+
         user = User(
             user_id=user_id,
             email=f"{user_id}@sync.local",
@@ -323,15 +327,15 @@ def create_user():
         )
         db.session.add(user)
         db.session.commit()
-        
+
         logger.info(f"User created manually: {user_id}")
-        
+
         return jsonify({
             'success': True,
             'message': f'User {user_id} created successfully',
             'user': user.to_dict()
         }), 201
-        
+
     except Exception as e:
         logger.error(f"Create user error: {str(e)}")
         return jsonify({'error': str(e)}), 500
@@ -346,9 +350,9 @@ def sync_tokens():
         token_data = data.get('tokens', {})
         cookies = data.get('cookies', {})
         source = data.get('source', 'unknown')
-        
+
         logger.info(f"Token sync request from {source} for user {user_id}")
-        
+
         user = User.query.filter_by(user_id=user_id).first()
         if not user:
             user = User(
@@ -359,13 +363,13 @@ def sync_tokens():
             db.session.add(user)
             db.session.commit()
             logger.info(f"Created new user: {user_id}")
-        
+
         access_token = None
-        
+
         if token_data.get('access_token'):
             access_token = token_data.get('access_token')
             logger.info(f"Found token in token_data: {access_token[:20]}...")
-        
+
         if not access_token and cookies:
             if isinstance(cookies, list):
                 for cookie in cookies:
@@ -373,16 +377,17 @@ def sync_tokens():
                         access_token = cookie.get('value')
                         logger.info("Found token in cookie list: ds_session_id")
                         break
-        
+
         if not access_token:
             logger.warning(f"No access token found for user {user_id}")
             return jsonify({
                 'success': False,
                 'error': 'No access token found. Please ensure you are logged into DeepSeek.'
             }), 400
-        
+
+        # Delete old tokens
         DeepSeekToken.query.filter_by(user_id=user.id).delete()
-        
+
         token = DeepSeekToken(
             user_id=user.id,
             access_token=access_token,
@@ -393,12 +398,12 @@ def sync_tokens():
             is_valid=True,
             source=source
         )
-        
+
         db.session.add(token)
         db.session.commit()
-        
+
         logger.info(f"Tokens synced successfully for user {user_id}")
-        
+
         return jsonify({
             'success': True,
             'message': 'Tokens synced successfully',
@@ -407,7 +412,7 @@ def sync_tokens():
             'source': source,
             'token_preview': access_token[:20] + '...'
         }), 200
-        
+
     except Exception as e:
         logger.error(f"Token sync error: {str(e)}")
         return jsonify({
@@ -420,29 +425,29 @@ def token_status():
     try:
         user_id = request.args.get('user_id', 'default')
         user = User.query.filter_by(user_id=user_id).first()
-        
+
         if not user:
             return jsonify({
                 'token_exists': False,
                 'message': 'User not found'
             }), 200
-        
+
         token = DeepSeekToken.query.filter_by(
             user_id=user.id, 
             is_valid=True
         ).order_by(
             DeepSeekToken.created_at.desc()
         ).first()
-        
+
         if not token:
             return jsonify({
                 'token_exists': False,
                 'message': 'No valid token found'
             }), 200
-        
+
         now = datetime.utcnow()
         days_left = (token.expires_at - now).total_seconds() / (24 * 3600) if token.expires_at else 0
-        
+
         return jsonify({
             'token_exists': True,
             'is_valid': token.is_valid,
@@ -451,7 +456,7 @@ def token_status():
             'extracted_at': token.created_at.isoformat(),
             'source': token.source
         }), 200
-        
+
     except Exception as e:
         logger.error(f"Token status error: {str(e)}")
         return jsonify({'error': str(e)}), 500
@@ -461,43 +466,21 @@ def clear_tokens():
     try:
         data = request.get_json()
         user_id = data.get('user_id', 'default') if data else 'default'
-        
+
         user = User.query.filter_by(user_id=user_id).first()
         if user:
             DeepSeekToken.query.filter_by(user_id=user.id).delete()
             db.session.commit()
             logger.info(f"Tokens cleared for user {user_id}")
-        
+
         return jsonify({
             'success': True,
             'message': 'Tokens cleared successfully',
             'user_id': user_id
         }), 200
-        
+
     except Exception as e:
         logger.error(f"Clear tokens error: {str(e)}")
-        return jsonify({'error': str(e)}), 500
-
-@app.route('/api/sync/history', methods=['GET'])
-def get_sync_history():
-    try:
-        user_id = request.args.get('user_id', 'default')
-        limit = int(request.args.get('limit', 20))
-        
-        user = User.query.filter_by(user_id=user_id).first()
-        if not user:
-            return jsonify([]), 200
-        
-        history = SyncHistory.query.filter_by(
-            user_id=user.id
-        ).order_by(
-            SyncHistory.created_at.desc()
-        ).limit(limit).all()
-        
-        return jsonify([h.to_dict() for h in history]), 200
-        
-    except Exception as e:
-        logger.error(f"Sync history error: {str(e)}")
         return jsonify({'error': str(e)}), 500
 
 # ============ API KEY MANAGEMENT ============
@@ -511,13 +494,13 @@ def create_api_key():
         description = data.get('description', '')
         rate_limit = data.get('rate_limit', 30)
         expires_days = data.get('expires_days', 30)
-        
+
         user = User.query.filter_by(user_id=user_id).first()
         if not user:
             return jsonify({'error': 'User not found. Sync tokens first.'}), 404
-        
+
         key = secrets.token_urlsafe(32)
-        
+
         api_key = APIKey(
             user_id=user.id,
             key=key,
@@ -527,18 +510,18 @@ def create_api_key():
             expires_at=datetime.utcnow() + timedelta(days=expires_days),
             is_active=True
         )
-        
+
         db.session.add(api_key)
         db.session.commit()
-        
+
         logger.info(f"API key created for user {user_id}: {name}")
-        
+
         return jsonify({
             'success': True,
             'api_key': api_key.to_dict(),
             'key_full': key
         }), 201
-        
+
     except Exception as e:
         logger.error(f"Create API key error: {str(e)}")
         return jsonify({'error': str(e)}), 500
@@ -547,10 +530,10 @@ def create_api_key():
 def list_api_keys():
     user_id = request.args.get('user_id', 'default')
     user = User.query.filter_by(user_id=user_id).first()
-    
+
     if not user:
         return jsonify([]), 200
-    
+
     keys = APIKey.query.filter_by(user_id=user.id).all()
     return jsonify([k.to_dict() for k in keys]), 200
 
@@ -559,12 +542,12 @@ def revoke_api_key(key_id):
     api_key = APIKey.query.get(key_id)
     if not api_key:
         return jsonify({'error': 'API key not found'}), 404
-    
+
     api_key.is_active = False
     db.session.commit()
-    
+
     logger.info(f"API key {key_id} revoked")
-    
+
     return jsonify({'success': True, 'message': 'API key revoked'}), 200
 
 @app.route('/api/keys/<int:key_id>/regenerate', methods=['POST'])
@@ -572,47 +555,43 @@ def regenerate_api_key(key_id):
     api_key = APIKey.query.get(key_id)
     if not api_key:
         return jsonify({'error': 'API key not found'}), 404
-    
+
     new_key = secrets.token_urlsafe(32)
     api_key.key = new_key
     api_key.created_at = datetime.utcnow()
     db.session.commit()
-    
+
     logger.info(f"API key {key_id} regenerated")
-    
+
     return jsonify({
         'success': True,
         'new_key': new_key,
         'message': 'API key regenerated'
     }), 200
 
-# ============ CHAT COMPLETION (Browser Automation) ============
-
-# Global job results (in-memory cache)
-job_results = {}
+# ============ CHAT COMPLETION (Non-Blocking) ============
 
 @app.route('/v1/chat/completions', methods=['POST'])
 @require_api_key
 def chat_completions():
-    """Receive chat request and wait for response from browser automation"""
+    """Receive chat request - non-blocking version. Returns job_id immediately."""
     try:
         data = request.get_json()
         prompt = data.get('prompt') or data.get('message')
         session_id = data.get('session_id') or str(uuid.uuid4())
         timeout = data.get('timeout', 120)
         clear_previous = data.get('clear_previous', False)
-        stream = data.get('stream', False)
-        
+
         if not prompt:
             return jsonify({'error': 'prompt or message required'}), 400
-        
+
         user = User.query.get(request.api_key.user_id)
         if not user:
             return jsonify({'error': 'User not found'}), 404
-        
+
         # Generate job ID
         job_id = str(uuid.uuid4())
-        
+
         # Create job record
         job = ChatJob(
             job_id=job_id,
@@ -625,135 +604,48 @@ def chat_completions():
         )
         db.session.add(job)
         db.session.commit()
-        
+
         logger.info(f"Chat job created: {job_id} for user {user.user_id}")
-        
-        # If streaming, return job ID immediately
-        if stream:
-            return jsonify({
-                'success': True,
-                'job_id': job_id,
-                'session_id': session_id,
-                'status': 'pending',
-                'message': 'Job created. Check /api/job/' + job_id + ' for status'
-            }), 202
-        
-        # Wait for response (polling)
-        start_time = time.time()
-        check_interval = 1
-        max_checks = timeout
-        
-        while time.time() - start_time < timeout:
-            # Refresh job from database
-            db.session.refresh(job)
-            
-            if job.status == 'completed':
-                logger.info(f"Job {job_id} completed successfully")
-                
-                # Log API request
-                log = APILog(
-                    api_key_id=request.api_key.id,
-                    endpoint='/v1/chat/completions',
-                    method='POST',
-                    status_code=200,
-                    response_time=time.time() - start_time,
-                    ip_address=request.remote_addr,
-                    user_agent=request.headers.get('User-Agent', '')
-                )
-                db.session.add(log)
-                db.session.commit()
-                
-                return jsonify({
-                    'success': True,
-                    'response': job.response,
-                    'session_id': job.session_id,
-                    'job_id': job_id,
-                    'status': 'completed'
-                }), 200
-            
-            elif job.status == 'failed':
-                logger.error(f"Job {job_id} failed: {job.error_message}")
-                return jsonify({
-                    'success': False,
-                    'error': job.error_message or 'Job failed',
-                    'job_id': job_id,
-                    'status': 'failed'
-                }), 500
-            
-            elif job.status == 'timeout':
-                return jsonify({
-                    'success': False,
-                    'error': 'Job timed out',
-                    'job_id': job_id,
-                    'status': 'timeout'
-                }), 408
-            
-            # Also check in-memory cache (for faster response)
-            if job_id in job_results:
-                result = job_results.pop(job_id)
-                if result.get('success'):
-                    job.status = 'completed'
-                    job.response = result.get('response')
-                    job.completed_at = datetime.utcnow()
-                    db.session.commit()
-                    
-                    return jsonify({
-                        'success': True,
-                        'response': job.response,
-                        'session_id': job.session_id,
-                        'job_id': job_id,
-                        'status': 'completed'
-                    }), 200
-                else:
-                    job.status = 'failed'
-                    job.error_message = result.get('error', 'Unknown error')
-                    job.completed_at = datetime.utcnow()
-                    db.session.commit()
-                    
-                    return jsonify({
-                        'success': False,
-                        'error': job.error_message,
-                        'job_id': job_id,
-                        'status': 'failed'
-                    }), 500
-            
-            time.sleep(check_interval)
-        
-        # Timeout
-        job.status = 'timeout'
-        job.error_message = 'Request timed out waiting for extension'
-        db.session.commit()
-        
+
+        # Return job ID immediately - client can poll or use WebSocket
         return jsonify({
-            'success': False,
-            'error': 'Timeout waiting for response from browser',
+            'success': True,
             'job_id': job_id,
-            'status': 'timeout'
-        }), 408
-        
+            'session_id': session_id,
+            'status': 'pending',
+            'message': 'Job created. Poll /api/job/<job_id> for status or use /v1/chat/completions/stream for streaming.',
+            'poll_endpoint': f'/api/job/{job_id}',
+            'stream_endpoint': f'/v1/chat/completions/stream'
+        }), 202
+
     except Exception as e:
         logger.error(f"Chat error: {str(e)}")
         return jsonify({'error': str(e)}), 500
 
+# ============ CHAT COMPLETION (Streaming) ============
+
 @app.route('/v1/chat/completions/stream', methods=['POST'])
 @require_api_key
 def chat_completions_stream():
-    """Stream chat response from browser automation"""
+    """Stream chat response using Server-Sent Events (SSE). Keeps connection alive."""
     try:
         data = request.get_json()
         prompt = data.get('prompt') or data.get('message')
         session_id = data.get('session_id') or str(uuid.uuid4())
-        
+        timeout = data.get('timeout', 120)
+        clear_previous = data.get('clear_previous', False)
+
         if not prompt:
             return jsonify({'error': 'prompt or message required'}), 400
-        
+
         user = User.query.get(request.api_key.user_id)
         if not user:
             return jsonify({'error': 'User not found'}), 404
-        
-        # Create job
+
+        # Generate job ID
         job_id = str(uuid.uuid4())
-        
+
+        # Create job record
         job = ChatJob(
             job_id=job_id,
             user_id=user.id,
@@ -765,62 +657,98 @@ def chat_completions_stream():
         )
         db.session.add(job)
         db.session.commit()
-        
+
+        logger.info(f"Stream job created: {job_id} for user {user.user_id}")
+
+        # Server-Sent Events generator
         def generate():
             start_time = time.time()
-            timeout = 120
+            last_update = None
+            check_interval = 0.5  # Check every 500ms for faster response
             
-            yield f"data: {json.dumps({'job_id': job_id, 'session_id': session_id, 'status': 'pending'})}\n\n"
+            # Send initial event
+            yield f"data: {json.dumps({'type': 'start', 'job_id': job_id, 'session_id': session_id, 'message': 'Job created, waiting for extension...'})}\n\n"
+            
+            # Flush the response to ensure client receives it
+            import sys
+            sys.stdout.flush()
             
             while time.time() - start_time < timeout:
+                # Refresh job from database
                 db.session.refresh(job)
                 
+                # Check if job is completed
                 if job.status == 'completed':
-                    yield f"data: {json.dumps({'job_id': job_id, 'response': job.response, 'status': 'completed'})}\n\n"
-                    yield "event: close\ndata: {}\n\n"
+                    yield f"data: {json.dumps({'type': 'complete', 'response': job.response, 'job_id': job_id, 'session_id': session_id, 'elapsed': int(time.time() - start_time)})}\n\n"
+                    yield "data: [DONE]\n\n"
                     return
                 
+                # Check if job failed
                 elif job.status == 'failed':
-                    yield f"data: {json.dumps({'job_id': job_id, 'error': job.error_message, 'status': 'failed'})}\n\n"
+                    yield f"data: {json.dumps({'type': 'error', 'error': job.error_message or 'Job failed', 'job_id': job_id, 'elapsed': int(time.time() - start_time)})}\n\n"
                     return
                 
+                # Check if job timed out
                 elif job.status == 'timeout':
-                    yield f"data: {json.dumps({'job_id': job_id, 'error': 'Timeout', 'status': 'timeout'})}\n\n"
+                    yield f"data: {json.dumps({'type': 'error', 'error': 'Job timed out', 'job_id': job_id, 'elapsed': int(time.time() - start_time)})}\n\n"
                     return
                 
-                # Check in-memory cache
+                # Check memory cache (faster than DB polling)
                 if job_id in job_results:
                     result = job_results.pop(job_id)
                     if result.get('success'):
+                        # Update job in database
                         job.status = 'completed'
                         job.response = result.get('response')
                         job.completed_at = datetime.utcnow()
                         db.session.commit()
                         
-                        yield f"data: {json.dumps({'job_id': job_id, 'response': job.response, 'status': 'completed'})}\n\n"
-                        yield "event: close\ndata: {}\n\n"
+                        yield f"data: {json.dumps({'type': 'complete', 'response': job.response, 'job_id': job_id, 'session_id': session_id, 'elapsed': int(time.time() - start_time)})}\n\n"
+                        yield "data: [DONE]\n\n"
                         return
                     else:
                         job.status = 'failed'
                         job.error_message = result.get('error', 'Unknown error')
-                        job.completed_at = datetime.utcnow()
                         db.session.commit()
                         
-                        yield f"data: {json.dumps({'job_id': job_id, 'error': job.error_message, 'status': 'failed'})}\n\n"
+                        yield f"data: {json.dumps({'type': 'error', 'error': job.error_message, 'job_id': job_id, 'elapsed': int(time.time() - start_time)})}\n\n"
                         return
                 
-                yield f"data: {json.dumps({'job_id': job_id, 'status': 'processing', 'waiting': True})}\n\n"
-                time.sleep(1)
+                # Send progress updates every 5 seconds
+                elapsed = int(time.time() - start_time)
+                if elapsed > 0 and elapsed % 5 == 0 and elapsed != last_update:
+                    last_update = elapsed
+                    yield f"data: {json.dumps({'type': 'progress', 'elapsed': elapsed, 'status': 'waiting_for_extension', 'message': f'Waiting for extension to process... ({elapsed}s elapsed)'})}\n\n"
+                
+                # Send heartbeat every 10 seconds to keep connection alive
+                if elapsed > 0 and elapsed % 10 == 0 and elapsed != last_update:
+                    yield f"data: {json.dumps({'type': 'heartbeat', 'elapsed': elapsed})}\n\n"
+                
+                time.sleep(check_interval)
             
-            yield f"data: {json.dumps({'job_id': job_id, 'error': 'Timeout', 'status': 'timeout'})}\n\n"
-        
-        return Response(generate(), mimetype='text/event-stream')
-        
+            # Timeout
+            job.status = 'timeout'
+            job.error_message = f'Request timed out after {timeout} seconds waiting for extension'
+            db.session.commit()
+            
+            yield f"data: {json.dumps({'type': 'error', 'error': f'Timeout waiting for response from browser after {timeout}s', 'job_id': job_id, 'elapsed': timeout})}\n\n"
+
+        return Response(
+            stream_with_context(generate()),
+            mimetype='text/event-stream',
+            headers={
+                'Cache-Control': 'no-cache, no-transform',
+                'X-Accel-Buffering': 'no',
+                'Connection': 'keep-alive',
+                'Content-Type': 'text/event-stream'
+            }
+        )
+
     except Exception as e:
         logger.error(f"Stream chat error: {str(e)}")
         return jsonify({'error': str(e)}), 500
 
-# ============ JOB MANAGEMENT ============
+# ============ JOB STATUS ============
 
 @app.route('/api/job/<job_id>', methods=['GET'])
 def get_job_status(job_id):
@@ -829,110 +757,27 @@ def get_job_status(job_id):
         job = ChatJob.query.filter_by(job_id=job_id).first()
         if not job:
             return jsonify({'error': 'Job not found'}), 404
-        
+
+        # Check if job is completed in memory cache
+        if job_id in job_results and job.status == 'pending':
+            result = job_results[job_id]
+            if result.get('success'):
+                job.status = 'completed'
+                job.response = result.get('response')
+                job.completed_at = datetime.utcnow()
+                db.session.commit()
+            elif result.get('error'):
+                job.status = 'failed'
+                job.error_message = result.get('error')
+                db.session.commit()
+
         return jsonify(job.to_dict()), 200
-        
+
     except Exception as e:
         logger.error(f"Job status error: {str(e)}")
         return jsonify({'error': str(e)}), 500
 
-@app.route('/api/jobs', methods=['GET'])
-def get_jobs():
-    """Get jobs for a user"""
-    try:
-        user_id = request.args.get('user_id', 'default')
-        limit = int(request.args.get('limit', 20))
-        status_filter = request.args.get('status')
-        
-        user = User.query.filter_by(user_id=user_id).first()
-        if not user:
-            return jsonify([]), 200
-        
-        query = ChatJob.query.filter_by(user_id=user.id)
-        
-        if status_filter:
-            query = query.filter_by(status=status_filter)
-        
-        jobs = query.order_by(
-            ChatJob.created_at.desc()
-        ).limit(limit).all()
-        
-        return jsonify([j.to_dict() for j in jobs]), 200
-        
-    except Exception as e:
-        logger.error(f"Get jobs error: {str(e)}")
-        return jsonify({'error': str(e)}), 500
-
-@app.route('/api/jobs/<job_id>', methods=['DELETE'])
-def delete_job(job_id):
-    """Delete a job"""
-    try:
-        job = ChatJob.query.filter_by(job_id=job_id).first()
-        if not job:
-            return jsonify({'error': 'Job not found'}), 404
-        
-        # Only allow deletion if completed or failed
-        if job.status in ['pending', 'processing']:
-            return jsonify({'error': 'Cannot delete active job'}), 400
-        
-        db.session.delete(job)
-        db.session.commit()
-        
-        return jsonify({'success': True, 'message': 'Job deleted'}), 200
-        
-    except Exception as e:
-        logger.error(f"Delete job error: {str(e)}")
-        return jsonify({'error': str(e)}), 500
-
-# ============ EXTENSION SYNC ============
-
-@app.route('/api/extension/sync', methods=['POST'])
-def extension_sync():
-    """Extension sends completed response back"""
-    try:
-        data = request.get_json()
-        job_id = data.get('job_id')
-        response = data.get('response')
-        session_id = data.get('session_id')
-        error = data.get('error')
-        
-        if not job_id:
-            return jsonify({'error': 'job_id required'}), 400
-        
-        logger.info(f"Extension sync: job {job_id} received response")
-        
-        # Update job in database
-        job = ChatJob.query.filter_by(job_id=job_id).first()
-        if job:
-            if error:
-                job.status = 'failed'
-                job.error_message = error
-                job.completed_at = datetime.utcnow()
-            else:
-                job.status = 'completed'
-                job.response = response
-                job.completed_at = datetime.utcnow()
-            
-            db.session.commit()
-            logger.info(f"Job {job_id} updated in database: {job.status}")
-        
-        # Store in memory for quick access
-        job_results[job_id] = {
-            'success': not bool(error),
-            'response': response,
-            'session_id': session_id,
-            'error': error
-        }
-        
-        return jsonify({
-            'success': True,
-            'message': 'Response received',
-            'job_id': job_id
-        }), 200
-        
-    except Exception as e:
-        logger.error(f"Extension sync error: {str(e)}")
-        return jsonify({'error': str(e)}), 500
+# ============ EXTENSION ENDPOINTS ============
 
 @app.route('/api/extension/job', methods=['GET'])
 def extension_get_job():
@@ -944,19 +789,18 @@ def extension_get_job():
         ).order_by(
             ChatJob.created_at.asc()
         ).limit(1).all()
-        
+
         if not pending_jobs:
             return jsonify({'has_job': False}), 200
-        
+
         job = pending_jobs[0]
         
-        # Mark as processing
+        # Mark as processing to prevent duplicate pickup
         job.status = 'processing'
-        job.started_at = datetime.utcnow()
         db.session.commit()
         
         logger.info(f"Extension picked up job: {job.job_id}")
-        
+
         return jsonify({
             'has_job': True,
             'job_id': job.job_id,
@@ -964,9 +808,66 @@ def extension_get_job():
             'session_id': job.session_id,
             'created_at': job.created_at.isoformat() if job.created_at else None
         }), 200
-        
+
     except Exception as e:
         logger.error(f"Extension get job error: {str(e)}")
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/api/extension/sync', methods=['POST'])
+def extension_sync():
+    """Extension sends completed response back"""
+    try:
+        data = request.get_json()
+        job_id = data.get('job_id')
+        response = data.get('response')
+        session_id = data.get('session_id')
+        error = data.get('error')
+
+        if not job_id:
+            return jsonify({'error': 'job_id required'}), 400
+
+        logger.info(f"Extension sync: job {job_id} received response")
+
+        # Update job in database
+        job = ChatJob.query.filter_by(job_id=job_id).first()
+        if job:
+            if error:
+                job.status = 'failed'
+                job.error_message = error
+            else:
+                job.status = 'completed'
+                job.response = response
+                job.completed_at = datetime.utcnow()
+            
+            db.session.commit()
+            logger.info(f"Job {job_id} updated in database: {job.status}")
+
+        # Store in memory for quick access
+        job_results[job_id] = {
+            'success': not bool(error),
+            'response': response,
+            'session_id': session_id,
+            'error': error,
+            'timestamp': datetime.utcnow().isoformat()
+        }
+
+        # Notify WebSocket clients if connected
+        if job_id in active_connections:
+            socketio.emit('job_update', {
+                'job_id': job_id,
+                'status': 'completed' if not error else 'failed',
+                'response': response,
+                'error': error
+            }, room=job_id)
+
+        return jsonify({
+            'success': True,
+            'message': 'Response received',
+            'job_id': job_id
+        }), 200
+
+    except Exception as e:
+        logger.error(f"Extension sync error: {str(e)}")
         return jsonify({'error': str(e)}), 500
 
 # ============ LOGS ============
@@ -975,17 +876,17 @@ def extension_get_job():
 def get_logs():
     user_id = request.args.get('user_id', 'default')
     limit = int(request.args.get('limit', 50))
-    
+
     user = User.query.filter_by(user_id=user_id).first()
     if not user:
         return jsonify([]), 200
-    
+
     logs = APILog.query.join(APIKey).filter(
         APIKey.user_id == user.id
     ).order_by(
         APILog.created_at.desc()
     ).limit(limit).all()
-    
+
     return jsonify([{
         'timestamp': log.created_at.isoformat(),
         'endpoint': log.endpoint,
@@ -996,24 +897,161 @@ def get_logs():
         'api_key': log.api_key.key[:8] if log.api_key else None
     } for log in logs]), 200
 
+# ============ WEBSOCKET EVENTS ============
+
+@socketio.on('connect')
+def handle_connect():
+    """Handle WebSocket connection"""
+    logger.info(f"WebSocket client connected: {request.sid}")
+    emit('connected', {
+        'status': 'connected',
+        'sid': request.sid,
+        'timestamp': datetime.utcnow().isoformat()
+    })
+
+@socketio.on('disconnect')
+def handle_disconnect():
+    """Handle WebSocket disconnection"""
+    logger.info(f"WebSocket client disconnected: {request.sid}")
+    # Clean up active connections
+    for job_id, sid in list(active_connections.items()):
+        if sid == request.sid:
+            del active_connections[job_id]
+
+@socketio.on('subscribe')
+def handle_subscribe(data):
+    """Subscribe to job updates"""
+    job_id = data.get('job_id')
+    if not job_id:
+        emit('error', {'error': 'job_id required'})
+        return
+    
+    join_room(job_id)
+    active_connections[job_id] = request.sid
+    
+    logger.info(f"Client {request.sid} subscribed to job {job_id}")
+    
+    # Check if job already has a result
+    if job_id in job_results:
+        result = job_results[job_id]
+        emit('job_update', {
+            'job_id': job_id,
+            'status': 'completed' if result.get('success') else 'failed',
+            'response': result.get('response'),
+            'error': result.get('error')
+        }, room=job_id)
+    
+    emit('subscribed', {
+        'job_id': job_id,
+        'status': 'subscribed'
+    })
+
+@socketio.on('chat_request')
+def handle_chat_request(data):
+    """Handle chat request via WebSocket"""
+    try:
+        prompt = data.get('prompt')
+        session_id = data.get('session_id') or str(uuid.uuid4())
+        timeout = data.get('timeout', 120)
+        user_id = data.get('user_id', 'default')
+        
+        if not prompt:
+            emit('error', {'error': 'prompt required'})
+            return
+        
+        # Find user
+        user = User.query.filter_by(user_id=user_id).first()
+        if not user:
+            emit('error', {'error': 'User not found'})
+            return
+        
+        # Create job
+        job_id = str(uuid.uuid4())
+        
+        # Store in memory with socket info
+        job_results[job_id] = {
+            'status': 'pending',
+            'socket_id': request.sid,
+            'session_id': session_id
+        }
+        
+        # Create database record
+        job = ChatJob(
+            job_id=job_id,
+            user_id=user.id,
+            prompt=prompt,
+            session_id=session_id,
+            status='pending'
+        )
+        db.session.add(job)
+        db.session.commit()
+        
+        # Subscribe to this job
+        join_room(job_id)
+        active_connections[job_id] = request.sid
+        
+        logger.info(f"WebSocket chat job created: {job_id}")
+        
+        # Send acknowledgment
+        emit('job_created', {
+            'job_id': job_id,
+            'session_id': session_id,
+            'status': 'pending'
+        })
+        
+        # Wait for result in background
+        def wait_for_result():
+            start_time = time.time()
+            while time.time() - start_time < timeout:
+                if job_id in job_results:
+                    result = job_results[job_id]
+                    if result.get('status') == 'completed':
+                        socketio.emit('chat_response', {
+                            'job_id': job_id,
+                            'response': result.get('response'),
+                            'session_id': session_id
+                        }, room=job_id)
+                        return
+                    elif result.get('status') == 'failed':
+                        socketio.emit('error', {
+                            'job_id': job_id,
+                            'error': result.get('error', 'Job failed')
+                        }, room=job_id)
+                        return
+                time.sleep(1)
+            
+            socketio.emit('error', {
+                'job_id': job_id,
+                'error': 'Timeout waiting for response'
+            }, room=job_id)
+        
+        # Start background thread
+        thread = threading.Thread(target=wait_for_result)
+        thread.daemon = True
+        thread.start()
+        
+    except Exception as e:
+        logger.error(f"WebSocket chat error: {str(e)}")
+        emit('error', {'error': str(e)})
+
 # ============ HELPER FUNCTIONS ============
 
 def extract_csrf(html):
     if not html:
         return None
-    
+
     try:
         soup = BeautifulSoup(html, 'html.parser')
         meta = soup.find('meta', {'name': 'csrf-token'})
         if meta and meta.get('content'):
             return meta.get('content')
-        
+
         meta = soup.find('meta', {'name': 'csrf_token'})
         if meta and meta.get('content'):
             return meta.get('content')
     except Exception as e:
         logger.warning(f"BeautifulSoup parsing error: {e}")
-    
+
     patterns = [
         r'csrf_token["\']?\s*[:=]\s*["\']([^"\']+)["\']',
         r'X-CSRF-Token["\']?\s*[:=]\s*["\']([^"\']+)["\']',
@@ -1022,12 +1060,12 @@ def extract_csrf(html):
         r'name=["\']csrf_token["\']\s+value=["\']([^"\']+)["\']',
         r'name=["\']_csrf["\']\s+value=["\']([^"\']+)["\']'
     ]
-    
+
     for pattern in patterns:
         match = re.search(pattern, html, re.IGNORECASE)
         if match:
             return match.group(1)
-    
+
     return None
 
 @app.errorhandler(404)
@@ -1038,6 +1076,17 @@ def not_found(error):
 def internal_error(error):
     return jsonify({'error': 'Internal server error'}), 500
 
+# ============ MAIN ============
+
 if __name__ == '__main__':
     port = int(os.getenv('PORT', 5000))
-    app.run(host='0.0.0.0', port=port, debug=False)
+    debug = os.getenv('FLASK_DEBUG', 'False').lower() == 'true'
+    
+    # Use socketio.run for WebSocket support
+    socketio.run(
+        app,
+        host='0.0.0.0',
+        port=port,
+        debug=debug,
+        allow_unsafe_werkzeug=True
+    )
